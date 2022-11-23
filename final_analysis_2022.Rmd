@@ -1,0 +1,2266 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+--
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r load/save image file}
+rm(list = ls())    
+library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary)
+setwd('/Users/alexandradecker/Dropbox/Projects/sustainedAttention/Scripts_and_Data_R/Lapses/analysis/scripts')
+source(file = 'utils.r')
+source(file = 'info.r')
+options(dplyr.print_max = 1e9)
+#save.image('final_analysis_2021.RData') # saved throughout
+encoding <- fread('../data_clean/encoding.csv')
+```
+
+Make new variables
+```{r}
+# re-level
+encoding$trialTypeF <- relevel(as.factor(encoding$trialTypeF), ref = "nonliving")
+encoding$trialTypeI <- relevel(as.factor(encoding$trialTypeI), ref = "living")
+encoding$groupA <- relevel(as.factor(encoding$groupA), ref = 'Adults')
+encoding$groupC <- relevel(as.factor(encoding$groupC), ref = 'Children')
+```
+
+#################################################
+Developmental differences in sustained attention
+#############################F####################
+
+Age group difference in lapse rates/time spent out of the zone 
+```{r age differences in lapse rates/time out of the zone}
+# aggregate data
+percents <- encoding[!participant %in% c(outlier$participant), .(percentOut = mean(zone, na.rm=T)), by = .(participant,group, groupEC)]
+
+# model
+percents[, summaryh(t.test(percentOut ~ groupEC))]
+
+# figure 2E
+ggplot(percents, aes(group, percentOut *100, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "Mean accuracy", y = "Attentional lapse scores \n (Time out of the zone %)") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  coord_cartesian(ylim = c(-15, 110)) + 
+  scale_y_continuous(breaks = c(0, 20, 40, 60, 80, 100)) +
+  theme(legend.position = 0) 
+#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
+
+percents[, fml := outliersZ(percentOut, zCutOff = 2.5, replaceOutliersWith = NA), by = group]
+percents%>%print(n=Inf)
+```
+
+Relationship between lapse rates and classification accuracy (initial validation reported in methods)
+```{r lapse rate and classification accuracy association for children and adults}
+mean_accuracy_group <- encoding[, .(acc = mean(acc)), by = .(participant, group, groupEC, groupA, groupC)]
+percents <- left_join(percents, mean_accuracy_group)
+
+# validation model for children
+acc_lapse_rate_child.m <- lm(acc ~ percentOut, data = percents[group == "Children"])
+summaryh(acc_lapse_rate_child.m)
+
+#validation model for adults
+acc_lapse_rate_adult.m <- lm(acc ~ percentOut, data = percents[group == "Adults"])
+summaryh(acc_lapse_rate_adult.m)
+```
+
+Age group difference in lapse frequency
+```{r age differences in lapse frequency}
+# aggregate data
+numOutChunks <- encoding[!participant %in% c(outlier$participant),.(Nolapses = max(chunkNo_out, na.rm=TRUE)), by = .(participant, group, groupEC)]
+
+# model
+summaryh(t.test(Nolapses ~ groupEC, data = numOutChunks))
+
+# figure S1
+ggplot(numOutChunks[!participant %in% c(outlier$participant)], aes(group, Nolapses, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "Mean accuracy", y = "No. of attentional lapses") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0)
+#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
+```
+
+Age group differences in lapse length
+```{r age differences in lapse length}
+# aggregate data
+length_attentional_lapses = encoding[zone == 1 & !participant %in% c(outlier$participant), .N, by = .(participant, group, groupEC, chunkNo)]
+length_attentional_lapses2 = encoding[zone == 1 & !participant %in% c(outlier$participant), list(lengthChunk = max(numInChunk)), by = .(participant, group, groupEC, chunkNo)]
+
+#aggregate data
+median_length_lapse = length_attentional_lapses[, .(median_lapse_length = median(N)), by = .(participant, group, groupEC)]
+
+#model - pre-registered; note results don't differ depending on model I run
+median_length_lapse[!participant %in% c(outlier$participant), summaryh(t.test(median_lapse_length ~ groupEC))]
+
+# figure S2
+ggplot(median_length_lapse, aes(group, median_lapse_length, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "", y = "Median lapse length") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0)
+#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
+```
+
+Analysis S1: permute data
+Are age differences in lapse length and frequency greater than would be expected by chance
+null hypothesis distribution for lapse frequency and length,
+```{r  eval = FALSE, echo = FALSE, include =FALSE}
+dt_permute <- data.table(run= 1:5000)
+i <-  1
+
+for (i in  1:500) {
+  #copy new classification data
+  encodingCopy <- encoding[!participant %in% c(outlier$participant), .(participant, trialNo, stimulus, classifyEnc, rt, groupEC)]
+  
+  #shuffle trials and arrange by participant
+  encodingCopy2 <- encodingCopy[sample(nrow(encodingCopy))]%>%arrange(participant) 
+  
+  #code new trial number
+  encodingCopy2 <- as.data.table(encodingCopy2)
+  encodingCopy2[, trialNo_new := 1:.N, by = participant] 
+  
+  # correct for linear drift in RT - to be consistent with primary analyses
+  encodingCopy2[!is.na(rt), rtResidual := residuals(lm(rt ~ trialNo_new)), by= participant]
+  
+  # remove and interpolate infrequent trials
+  encodingCopy2[classifyEnc == "living", rtResidual := NA]
+  encodingCopy2[, rtResidual_zone_surround := na_ma(rtResidual, k=2, weighting = "simple"), by = participant]
+  
+  # compute RT absolute deviance in new data
+  encodingCopy2[!is.na(rtResidual_zone_surround), rtMeanAbsoluteDeviation_surround := abs(rtResidual_zone_surround - mean(rtResidual_zone_surround)), by = participant] 
+  
+  # smooth data using gaussian kernel
+  encodingCopy2[, smoothed_gaussian := movAvg2(y = rtMeanAbsoluteDeviation_surround, bw = 2, type = "gaussian", center.weight  = 1, furthest.weight = 0.5), by = participant]
+
+  # compute cut off used to assign zone labels
+  cutOffs <- encodingCopy2[, median(smoothed_gaussian, na.rm=TRUE), by = .(participant)]
+  cutOff <- cutOffs[, mean(V1)]
+  
+  # assign zone labels
+  encodingCopy2[smoothed_gaussian > cutOff, zone := 1]
+  encodingCopy2[smoothed_gaussian < cutOff, zone := 0]
+  
+  # compute length and frequency of lapses
+  encodingCopy2[zone == 1,  zone2 := -100]
+  encodingCopy2[zone == 0,  zone2 := 100]
+  encodingCopy2[, chunkIndicate := c(1000, diff(zone2))]
+  encodingCopy2[trialNo_new == 1, chunkIndicate := 200]
+  encodingCopy2[chunkIndicate == 0, chunkIndicate := NA]
+  
+  #create chunk numbers, for in and out of the zone
+  encodingCopy2[!is.na(chunkIndicate), chunkNo := 1:.N, by = participant]
+  encodingCopy2[!is.na(chunkIndicate) & zone == 1, chunkNo_out := 1:.N, by = participant]
+  encodingCopy2[!is.na(chunkIndicate) & zone == 0, chunkNo_in := 1:.N, by = participant]
+  encodingCopy2[, chunkNo := as.integer(na.locf(chunkNo)), by = participant] 
+  encodingCopy2[, numInChunk := 1:.N, by = .(chunkNo, participant)]
+  
+  # compute maximum chunk number for out of the zone (or the total number of lapses per person/ lapse frequency)
+  ChunkNumOut <- encodingCopy2[, list(numOutChunks = max(chunkNo_out, na.rm=TRUE)), by = .(participant, groupEC)]
+  
+  # for this iteration, compute the t statistic for lapse frequency and add to dt_permute
+  testNum_chunks <- t.test(numOutChunks ~ groupEC, data = ChunkNumOut)
+  dt_permute[run == i, kid_lapse_Num := testNum_chunks$estimate[1]]
+  dt_permute[run == i, adult_lapse_Num := testNum_chunks$estimate[2]]
+  dt_permute[run == i, t_stat_Num := testNum_chunks$statistic]
+  
+  # for this iteration, compute the t statistic for median lapse length and add to dt_permute
+  lengthChunks_new <- encodingCopy2[zone == 1, list(lengthChunk = max(numInChunk)), by = .(groupEC, participant, chunkNo)]%>%arrange(participant, chunkNo)
+  medianChunkLength_new <- lengthChunks_new[, list(median = median(lengthChunk)), by = .(participant, groupEC)]
+  
+  test_chunkLength <- t.test(median ~ groupEC, data = medianChunkLength_new)
+  dt_permute[run == i, kid_length_out:= test_chunkLength$estimate[1]]
+  dt_permute[run == i, adult_length_out:= test_chunkLength$estimate[2]]
+  dt_permute[run == i, t_stat_length:= test_chunkLength$statistic]
+  print(i)
+}
+```
+
+permutation analysis - Lapse frequency
+compute probability of obtaining this result in null hypothesis distribution 
+```{r eval = FALSE, echo = FALSE, include =FALSE }
+# probability - frequency of lapses
+sum(dt_permute$t_stat_Num  > 4.10)/5000 
+
+# Figure S2 - frequency of lapses
+quantile(dt_permute$t_stat_Num, probs = c(0.025, .975)) # determine where 95% confidence intervals are within distribution
+ggplot(dt_permute, aes(x = (t_stat_Num))) +
+  geom_histogram(position = "dodge", fill  = "mediumorchid", color = "black", bins = 20, size =1)+
+  ggtheme +
+  labs(x = "t-values", y = "Proportion of occurences") +
+  geom_vline(xintercept = c(2.29, 3.84), linetype = "dashed")+
+scale_y_continuous(breaks = c(0, 200, 400, 600, 800), label = c("0","0.04", "0.08","0.12", "0.16")) +
+  #scale_x_continuous(limits = c(-1.25, -4.11), breaks = c(1.5, 2, 2.5, 3, 3.5, 4)) +
+  geom_segment(aes(x = 4.10, y = 0, xend = 4.10, yend = 800), color  = "orange")
+ggsave(file = "tStat_FrequencyLapses.eps" , width = 5.5, height = 3)
+```
+
+permutation analysis - Lapse length
+null hypothesis distribution t stat for lapse length group differences 
+```{r eval = FALSE, echo = FALSE, include =FALSE}
+# probability in null hypothesis distribution
+sum(dt_permute$t_stat_length  > 7.05)/5000
+
+#Figure S2 - lapse length 
+quantile(dt_permute$t_stat_length, probs = c(0.025, .975))
+ggplot(dt_permute, aes(x = (t_stat_length))) +
+  geom_histogram(position = "dodge", fill  = "mediumorchid", color = "black", bins = 20, size =1)+
+  ggtheme +
+  geom_vline(xintercept = c(3.88, 7.74), linetype = "dashed")+
+  labs(x = "t-value", y = "Proportion of occurences") +
+  scale_y_continuous(breaks = c(0, 200, 400, 600, 800), label = c("0","0.04", "0.08", "0.12", "0.16"))+
+  geom_segment(aes(x = 7.05, y = 0, xend = 7.05, yend = 800), color  = "orange")
+ggsave(file = "tStat_LengthLapses.eps" , width = 5.5, height = 3 )
+```
+
+Figure 2A,C- Representative child's raw RT and RT deviance
+Figure 2A and 2C
+```{r  eval = FALSE, echo = FALSE, include =FALSE}
+meanrt <- encoding[participant == 224, mean(rt, na.rm=T)]
+cutOff <- encoding[, median(smoothed_gaussian, na.rm=TRUE), by = .(participant)][, mean(V1)]
+
+# Figure 2A - raw RT
+ggplot(encoding[participant == 224], aes(trialNo, rtResidual + meanrt)) + 
+  geom_point(color = 'hotpink3', size = 2) + 
+  labs(x = 'Trial number', y = 'Response time (seconds)') + 
+  ggtheme +
+  coord_cartesian(ylim = c(0, 1.5))
+#ggsave( file = "child_rtResidual.eps", width = 5.5, height = 3)
+
+# Figure 2C - RT deviance with zone assignment
+toPlot <- encoding[participant == 224 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
+smoothed_values <- approx(toPlot$trialNo, toPlot$smoothed_gaussian, n = 3500)
+non_smoothed_values <- approx(toPlot$trialNo, toPlot$rtMeanAbsoluteDeviation, n = 3500)
+toPlot_smoothed <- data.table(trialNo = smoothed_values$x, smoothed_deviance = smoothed_values$y)
+toPlot_unsmoothed <- data.table(trialNo = non_smoothed_values$x, unsmoothed_deviance = non_smoothed_values$y)
+toPlot2 <- left_join(toPlot_unsmoothed, toPlot_smoothed)
+toPlot2[, zone := ifelse(smoothed_deviance > cutOff, 'Out of the zone', 'In the zone')]
+encoding[acc == 0, error := 0]
+toPlotErrors <- encoding[participant == 224 & trialNo %in% c(1:200), .(trialNo, error)]
+
+ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) + 
+  geom_line(data = toPlot2, aes(trialNo, y = unsmoothed_deviance), inherit.aes = F, color = 'lightgrey') +
+  geom_path(group = 1, size = 1.5) +
+  labs(x  = "Trial Number", y = "Smoothed RT deviance") +
+  ggtheme + 
+  scale_color_manual(breaks = c("In the zone", "Out of the zone"), values = c("maroon4", "hotpink1")) + 
+  geom_point(data = toPlotErrors, aes(trialNo, y = error), inherit.aes = F, color = 'red', shape = 15) + 
+  scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
+  coord_cartesian(ylim = c(0, 0.6)) + 
+  theme(legend.position = 0)
+#ggsave( file = "child_smoothed_gaussian.eps", width = 5.5, height = 3)
+```
+
+Figure 2B, D - Representative adult's raw RT and RT deviance
+```{r Figure 2B and 2D eval = FALSE, echo = FALSE, include =FALSE}
+# Figue 2B
+meanrt <- encoding[participant == 157, mean(rt, na.rm=T)]
+ggplot(encoding[participant == 157], aes(trialNo, rtResidual + meanrt)) + 
+  geom_point(color = 'royalblue3', size = 2) + 
+  labs(x = 'Trial Number', y = 'Response time (seconds)') + 
+  ggtheme +
+  coord_cartesian(ylim = c(0, 1.5))
+#ggsave( file = "adult_rtResidual.eps", width = 5.5, height = 3)
+
+# Figure 2D
+toPlot <- encoding[participant == 157 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
+smoothed_values <- approx(toPlot$trialNo, toPlot$smoothed_gaussian, n = 3500)
+non_smoothed_values <- approx(toPlot$trialNo, toPlot$rtMeanAbsoluteDeviation, n = 3500)
+toPlot_smoothed <- data.table(trialNo = smoothed_values$x, smoothed_deviance = smoothed_values$y)
+toPlot_unsmoothed <- data.table(trialNo = non_smoothed_values$x, unsmoothed_deviance = non_smoothed_values$y)
+toPlot2 <- left_join(toPlot_unsmoothed, toPlot_smoothed)
+toPlot2[, zone := ifelse(smoothed_deviance > cutOff, 'Out of the zone', 'In the zone')]
+encoding[acc == 0, error := 0]
+toPlotErrors <- encoding[participant == 157 & trialNo %in% c(1:200), .(trialNo, error)]
+
+# Figure 2D
+ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) + 
+  geom_line(data = toPlot2, aes(trialNo, y = unsmoothed_deviance), inherit.aes = F, color = 'lightgrey') +
+  geom_path(group = 1, size = 1.5) +
+  labs(x  = "Trial Number", y = "Smoothed RT deviance") +
+  ggtheme + 
+  scale_color_manual(breaks = c("In the zone", "Out of the zone"), values = c("royalblue4", "steelblue1")) + 
+  geom_point(data = toPlotErrors, aes(trialNo, y = error), inherit.aes = F, color = 'red', shape = 15) + 
+  scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
+  coord_cartesian(ylim = c(0, 0.6)) + 
+  theme(legend.position = 0)
+#ggsave( file = "adult_smoothed_gaussian.eps", width = 5.5, height = 3)
+```
+
+#########################################################
+Developmental differences in classification performance
+#########################################################
+
+```{r Age group differences in classification performance}
+# aggregate data
+aggregate_accuracy_group <- encoding[, .(acc = mean(acc)), by = .(participant, group, groupEC, groupA, groupC, trialTypeEC, trialType, trialTypeI, trialTypeF)]
+encoding$groupEC
+accuracy_group.m_agg <- lmer(acc~groupEC * trialTypeEC + (1|participant), data = aggregate_accuracy_group[!participant %in% c(outlier$participant)]);summaryh(accuracy_group.m_agg)
+
+# separately for children and adults:
+aggregate_accuracy_group[!participant %in% c(outlier$participant), summaryh(lm(acc ~ groupEC)), by = trialTypeEC][term != "(Intercept)"]
+```
+
+Between subjects: Accuracy and Attention relationships 
+```{r relationship between attentional lapse rates and classification accuracy}
+# model: accuracy and attention correlation
+percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut)])
+percents_trialtype[, percentOutC := scale(percentOut, scale = F)]
+
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeEC * groupEC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant)]); summaryh(percentOut_accuracy.m)
+
+percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC)), by = .(group, trialTypeEC)][term != "(Intercept)"]
+
+# Visualize - accuracy and attention correlation
+ggplot(percents[!participant %in% c(outlier$participant)], aes(percentOut, acc, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.9, .95, 1), labels = c(90, 95, 100)) +
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+    coord_cartesian(ylim = c(.9, 1.01))+
+  theme(legend.position = 0)
+ggsave( file = "accuracy_percent_out_group.png", height = 3, width = 4)
+
+# Figure S4A
+ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'nonliving'], aes(percentOutC, acc, col = group))+
+  geom_point() +
+  ggtheme +
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.94, .96, .98, 1), labels = c(94, 96, 98, 100)) +
+  coord_cartesian(ylim = c(.935, 1.015), xlim = c(0.05, .85))+
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
+  theme(legend.position = 0)
+#ggsave( file = "accuracy_percent_out_group_frequent.png", width = 5, height = 3)
+
+# Figure S4B
+ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'living'], aes(percentOut, acc, col = group))+
+  geom_point() +
+  ggtheme +
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.4, .6, .8, 1), labels = c(40, 60, 80, 100)) +
+  coord_cartesian(ylim = c(.42, 1.018), xlim = c(0.05, .85))+
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
+  theme(legend.position = 0)
+#ggsave( file = "accuracy_percent_out_group_infrequent.png", width = 5, height = 3)
+```
+
+Re-do above analyses comparing children to matched adults
+Check whether attentional lapse rates shape classication in high vs low lapsing adults
+```{r}
+### two groups of adults ###
+library(stats)
+dataToCluster <- percents[group == "Adults" & !participant %in% c(outlier$participant), .(participant, percentOut)]
+dataToCluster[, percentOutZ := scale(percentOut)]
+dataToCluster$kmeansGroup <- kmeans(dataToCluster$percentOutZ, centers = 2, iter.max = 1000, algorithm = "MacQueen")[1]
+dataToCluster[, .N, by = kmeansGroup]
+dataToCluster[, mean(percentOutZ), by = kmeansGroup]
+colors <- c(colors, "mediumorchid4", 'yellow4')
+dataToCluster <- rbind(dataToCluster,percents[group == "Children" & !participant %in% c(outlier$participant), .(participant, percentOut)], fill = T)
+
+# join data
+percents$kmeansGroup <- NULL
+percents <- left_join(percents, dataToCluster)
+percents[, .N, by = .(kmeansGroup)]
+percents[, percentOutC := scale(percentOut, scale = F)]
+# data
+percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut, percentOutC, kmeansGroup)])
+```
+
+```{r}
+# do lapses influence accuracy more in children than high lapsing adults (separately by trial type) 
+percents_trialtype[!kmeansGroup %in% c(1), summaryh(lm(acc ~ percentOutC * groupEC)), by = .( trialTypeEC)][!term %in% "(Intercept)"]
+
+# do lapses influence accuracy more in children than low lapsing adults (separately by trial type) 
+percents_trialtype[!kmeansGroup %in% c(2), summaryh(lm(acc ~ percentOutC * groupEC)), by = .( trialTypeEC)][!term %in% "(Intercept)"]
+
+percents_trialtype[kmeansGroup == 1, kmeansGroupEC := -0.5]
+percents_trialtype[kmeansGroup == 2, kmeansGroupEC := 0.5]
+percents_trialtype[!kmeansGroup %in% c(3), summaryh(lm(acc ~ percentOutC * kmeansGroupEC)), by = .( trialTypeEC)][!term %in% "(Intercept)"]
+
+# low vs children
+percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroupEC %in% c(1), 
+                   summaryh(lm(acc ~ percentOutC * groupEC)), by = .(trialType)]
+percents[!participant %in% c(outlier$participant) & !kmeansGroup %in% c(1), 
+                   summaryh(lm(acc ~ percentOutC * groupEC))]
+
+percents[, fml := outliersZ(percentOutC, zCutOff = 2.5, digits = 10), by = group]
+percents[is.na(fml)]
+
+
+# high vs children
+percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroupEC %in% c(-1), 
+                   summaryh(lm(acc ~ percentOutC * groupEC)), by = .(trialType)]
+percents[!participant %in% c(outlier$participant) & !kmeansGroup %in% c(2), 
+                   summaryh(lm(acc ~ percentOutC * groupEC))]
+
+
+# within high vs. low lapsing adults
+percents[!participant %in% c(outlier$participant), 
+                   summaryh(lm(acc ~ percentOutC)), by = .(kmeansGroup)][term !="(Intercept)"]
+percents_trialtype[!participant %in% c(outlier$participant), 
+                   summaryh(lm(acc ~ percentOutC)), by = .(trialType, kmeansGroup)][term !="(Intercept)"]
+percents[!participant %in% c(outlier$participant), mean(percentOut), by = kmeansGroup]
+
+percents_trialtype[, kmeansGroupEC := ifelse(kmeansGroup == 1, -0.5, 0.5)]
+```
+
+```{r figure relating percent out to classification separately for high vs. low lapsing adults}
+ggplot(percents[!participant %in% c(outlier$participant) & group %in% ("Adults")], aes(percentOut*100, acc*100, col = as.factor(kmeansGroup)))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(data = percents[kmeansGroup == 1], formula = y ~ x, method = "lm") +
+  stat_smooth(data = percents[kmeansGroup == 2], formula = y ~ x, method = "lm") +
+  labs(x = "Lapse rates (%)", y = "Classification accuracy (%)") +
+  scale_color_manual(values = c("royalblue1", "blue4")) +
+  theme(legend.position = 0) +
+  coord_cartesian(ylim = c(95, 100)) + 
+  scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))
+ggsave( file = "accuracy_percent_out_group.png", height = 3, width =5)
+```
+
+```{r Exploratory: accuracy within each zone}
+# between subject method:
+encoding[, zoneEC := ifelse(zone == 1, 0.5, -0.5)]
+accuracy_zone_group.df <- encoding[, .(acc = mean(acc)), by = .(participant, group, groupEC, zoneEC, trialTypeEC)]
+accuracy_zone_group.df[!participant %in% c(outlier$participant), summaryh(lmer(acc ~ zoneEC * trialTypeEC * groupEC + (1|participant)))]
+accuracy_zone_group.df[!participant %in% c(outlier$participant), 
+                       summaryh(lm(acc ~ zoneEC)), by = .(trialTypeEC)]
+
+# visualize
+acc_by_zone <- encoding[, .(acc = mean(acc, na.rm=T)), by = .(participant, group, zoneEC)]
+acc_by_zone[, zone := ifelse(zoneEC == 0.5, "out", "in")]
+
+ggplot(acc_by_zone, aes(as.factor(group), acc * 100, color = as.factor(zone))) +
+  stat_summary(position = position_dodge(0.1), size = 1) +
+  scale_color_manual(breaks = c("in", "out"), values = c("darkblue", "lightblue")) +
+  labs(y = "Classification accuracy (%)", x = " ") +
+  coord_cartesian(ylim = c(93.5, 100))+
+  ggtheme 
+#ggsave(file = "accuracy_by_zone.eps", width = 5, height = 3.4)
+```
+
+#### Accuracy and time out mediation ####
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+#acme: mediated (ab) effect
+#ade: direct effect (c')
+#total effect: c
+percents[!participant %in% c(outlier$participant), percentOutZ := scale(percentOut)]
+percents[!participant %in% c(outlier$participant), mean_acc.allZ := scale(acc)]
+
+model.y_all = lm(mean_acc.allZ ~ groupEC + percentOutZ, data = percents[!participant %in% c(outlier$participant)])
+summary(model.y_all)
+
+model.m_all = lm(percentOutZ ~ groupEC, data = percents[!participant %in% c(outlier$participant)])
+summary(model.m_all)
+
+model.mediate_attention_accuracy_all = mediate(model.m_all, model.y_all, sims = 5000, treat = 'groupEC', mediator = 'percentOutZ', boot = TRUE)
+summary(model.mediate_attention_accuracy_all)
+
+#get standard errors
+source( "http://page-gould.com/scripts/r/mediations_patch.r") # Needed to update the mediations function
+standard.errors(model.mediate_attention_accuracy_all)
+
+#get effect size of models
+library(hausekeep)
+es(r = 0.15)
+es(r = 0.56)
+```
+non living trials
+```{r  eval = FALSE, echo = FALSE, include =FALSE}
+percents[!participant %in% c(accuracy_outliers, percentOut_outliers), mean_acc.nonlivingZ := scale(nonliving_accuracy)]
+percents[!participant %in% c(accuracy_outliers, percentOut_outliers), percentOutZ := scale(percentOut)]
+model.y_nonliving =  lm(mean_acc.nonlivingZ ~ groupEC + percentOutZ, data = percents[!participant %in% c(accuracy_outliers, percentOut_outliers)])
+summary(model.y_nonliving)
+model.m_all = lm(percentOutZ ~ groupEC, data = percents[!participant %in% c(accuracy_outliers, percentOut_outliers)]) 
+summary(model.m_all)
+model.mediate_attention_accuracy_nonliving = mediate(model.m_all, model.y_nonliving, sims = 5000, treat = 'groupEC', mediator = 'percentOutZ', boot = TRUE)
+summary(model.mediate_attention_accuracy_nonliving)
+source( "http://page-gould.com/scripts/r/mediations_patch.r" ) # Needed to update the mediations function
+standard.errors(model.mediate_attention_accuracy_nonliving)
+```
+living trials
+```{r eval = FALSE, echo = FALSE, include =FALSE}
+percents[!participant %in% c(accuracy_outliers, percentOut_outliers), mean_acc.livingZ := scale(living_accuracy)]
+model.y_living =  lm(mean_acc.livingZ ~ groupEC + percentOutZ, data = percents[!participant %in% c(accuracy_outliers, percentOut_outliers)])
+summary(model.y_living)
+model.m_all = lm(percentOutZ ~ groupEC, data = percents[!participant %in% c(accuracy_outliers, percentOut_outliers)]) 
+summary(model.m_all)
+model.mediate_attention_accuracy_living = mediate(model.m_all, model.y_living, sims = 5000, treat = 'groupEC', mediator = 'percentOutZ', boot = TRUE)
+summary(model.mediate_attention_accuracy_living)
+source( "http://page-gould.com/scripts/r/mediations_patch.r" ) # Needed to update the mediations function
+standard.errors(model.mediate_attention_accuracy_living)
+```
+
+
+#################################################################
+Within subject analysis predicting accuracy from RT deviance
+#################################################################
+
+model for accuracy ~ trial type * group * age
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+# model: Age differences
+encoding[, pre_smoothed_deviance_Z := scale(pre_smoothed_deviance), by = participant]
+
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * trialTypeEC * groupEC + (pre_smoothed_deviance_scaled * trialTypeEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction.m)
+
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * trialTypeEC  + (pre_smoothed_deviance_scaled * trialTypeEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding[group == "Adults"]); summaryh(continuous_attention_accuracy_age_interaction.m)
+
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * trialTypeEC  + (pre_smoothed_deviance_scaled * trialTypeEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding[group == "Children"]); summaryh(continuous_attention_accuracy_age_interaction.m)
+
+#z scored variable
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_Z * trialTypeEC * groupA + (pre_smoothed_deviance_Z * trialTypeEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction.m)
+
+
+# frequent trials
+encoding$trialTypeF <- relevel(as.factor(encoding$trialTypeF), ref = "nonliving")
+continuous_attention_accuracy_age_interaction_nonliving.m = glmer(acc ~ pre_smoothed_deviance_scaled * trialTypeF * groupEC + (pre_smoothed_deviance_scaled * trialTypeF||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction_nonliving.m)
+
+# infrequent trials
+encoding$trialTypeI <- relevel(as.factor(encoding$trialTypeI), ref = "living")
+
+continuous_attention_accuracy_age_interaction_living.m = glmer(acc ~ pre_smoothed_deviance_scaled  + (pre_smoothed_deviance_scaled|participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding[group == "Adults" & trialTypeI == "living"]); summaryh(continuous_attention_accuracy_age_interaction_living.m)
+
+
+# validation in adults
+continuous_attention_accuracy_adults.m = glmer(acc ~ pre_smoothed_deviance_scaled + (pre_smoothed_deviance_scaled |participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding[group == "Adults" & classify]); summaryh(continuous_attention_accuracy_adults.m)
+tst <- encoding[, summaryh(glmer(acc ~ pre_smoothed_deviance_scaled + (1|participant), family = "binomial")), by = .(group, trialType)]
+
+# validation in kids
+continuous_attention_accuracy_children.m = glmer(acc ~ pre_smoothed_deviance_scaled  + (pre_smoothed_deviance_scaled|participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding[group == "Children"]); summaryh(continuous_attention_accuracy_children.m)
+
+#use emmeans to break down simple effects
+continuous_attention_accuracy_age_interaction.mf = glmer(acc ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction.mf)
+
+# compute standard deviations
+Rtdeva <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) + sd(encoding$pre_smoothed_deviance_scaled, na.rm=T)
+Rtdev <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) 
+Rtdevb <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) - sd(encoding$pre_smoothed_deviance_scaled, na.rm=T)
+
+#mylist <- list(percentOut = c(perca, perc, percb), groupEC = c(-.5, .5), classifyEncEC = c(-.5, .5))
+mylist <- list(rtDev = c(Rtdeva, Rtdev, Rtdevb), classifyEnc = c("living", "nonliving"))
+emtrends(continuous_attention_accuracy_age_interaction.mf, ~classifyEnc, var = "pre_smoothed_deviance_scaled", at = mylist)
+
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "nonliving")
+continuous_attention_accuracy_age_interaction.mtest = glmer(acc ~ pre_smoothed_deviance_scaled * classifyEnc * groupEC + (pre_smoothed_deviance_scaled * classifyEnc||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction.mtest)
+
+# Visualize overall relationship between accuracy and RT deviance
+toPlot <- encoding[!is.na(acc) & !is.na(pre_smoothed_deviance), .(rt_deviance = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, acc)]
+toPlot.w <- seWithin(data = toPlot, measurevar = "rt_deviance", betweenvars = "group", withinvars = "acc", idvar = "participant")
+
+ggplot(toPlot.w, aes(as.factor(group), rt_deviance, col = as.factor(acc))) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = rt_deviance - se, ymax = rt_deviance + se), position = position_dodge(width = 0.5), width = 0, size = 1) + 
+  ggtheme + 
+#scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
+  scale_color_manual(breaks = c(0, 1), labels = c("Error", "Correct"), values = c("orchid4", "seagreen4")) +
+  labs(y = "Preceding RT deviance (s)", x = " ") 
+ggsave("accuracy_preceding.eps", height = 3.1, width = 5.3)
+```
+
+
+
+```{r }
+# re-do graph so it's easier to interpret (with memory hits on the y axis, age group on the x axis, and preceding deviance on the color)
+#toPlot <- encoding[!is.na(acc) & !is.na(pre_smoothed_deviance), .(rt_deviance = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, acc)]
+encoding[, median_pre_smoothed_deviance := median(pre_smoothed_deviance, na.rm=T), by = participant]
+encoding[, pre_smoothed_deviance_cat := ifelse(pre_smoothed_deviance > median_pre_smoothed_deviance, "high", "low")]
+encoding[pre_smoothed_deviance == median_pre_smoothed_deviance, pre_smoothed_deviance_cat := "low"]
+encoding[, mean(pre_smoothed_deviance), by = .(pre_smoothed_deviance_cat)]
+encoding[is.na(pre_smoothed_deviance_cat) & !is.na(pre_smoothed_deviance)]
+
+toPlot <- encoding[!is.na(pre_smoothed_deviance_cat), .(mean_acc = mean(acc, na.rm=T)), by = .(participant, group, pre_smoothed_deviance_cat)]
+toPlot.w <- seWithin(data = toPlot, measurevar = "mean_acc", betweenvars = "group", withinvars = "pre_smoothed_deviance_cat", idvar = "participant")
+
+ggplot(toPlot.w, aes(group, mean_acc*100, col = pre_smoothed_deviance_cat)) +
+  #stat_summary()+
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = mean_acc*100 - se*100, ymax = mean_acc*100 + se*100), position = position_dodge(width = 0.5), width = 0, size = 1) + 
+  ggtheme  + 
+#scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
+  scale_color_manual(breaks = c("low", "high"), labels = c("low deviance", "high deviance"), values = c("orchid4", "seagreen4")) +
+  scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))+
+  coord_cartesian(ylim = c(94, 100)) +
+  labs(y = "Accuracy (%)", x = " ", col = " ") 
+ggsave("accuracy_preceding.eps", height = 3, width = 5.5)
+
+
+# frequent trials only
+toPlot <- encoding[!is.na(pre_smoothed_deviance_cat) & classifyEnc == "nonliving", .(mean_acc = mean(acc, na.rm=T)), by = .(participant, group, pre_smoothed_deviance_cat)]
+toPlot.w <- seWithin(data = toPlot, measurevar = "mean_acc", betweenvars = "group", withinvars = "pre_smoothed_deviance_cat", idvar = "participant")
+
+ggplot(toPlot.w, aes(group, mean_acc*100, col = pre_smoothed_deviance_cat)) +
+  #stat_summary()+
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = mean_acc*100 - se*100, ymax = mean_acc*100 + se*100), position = position_dodge(width = 0.5), width = 0, size = 1) + 
+  ggtheme  + 
+#scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
+  scale_color_manual(breaks = c("low", "high"), labels = c("low deviance", "high deviance"), values = c("orchid4", "seagreen4")) +
+  scale_y_continuous(breaks = c(96, 98, 100, 103), labels = c("94", "96", "98", "100"))+
+  coord_cartesian(ylim = c(96, 100)) +
+  labs(y = "Accuracy (%)", x = " ", col = " ") 
+ggsave("accuracy_preceding_freq.eps", height = 3, width = 5.5)
+
+
+# infrequent trials only
+toPlot <- encoding[!is.na(pre_smoothed_deviance_cat) & classifyEnc == "living", .(mean_acc = mean(acc, na.rm=T)), by = .(participant, group, pre_smoothed_deviance_cat)]
+toPlot.w <- seWithin(data = toPlot, measurevar = "mean_acc", betweenvars = "group", withinvars = "pre_smoothed_deviance_cat", idvar = "participant")
+
+ggplot(toPlot.w, aes(group, mean_acc*100, col = pre_smoothed_deviance_cat)) +
+  #stat_summary()+
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = mean_acc*100 - se*100, ymax = mean_acc*100 + se*100), position = position_dodge(width = 0.5), width = 0, size = 1) + 
+  ggtheme  + 
+#scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
+  scale_color_manual(breaks = c("low", "high"), labels = c("low deviance", "high deviance"), values = c("orchid4", "seagreen4")) +
+  coord_cartesian(ylim = c(70, 95)) +
+  labs(y = "Accuracy (%)", x = " ", col = " ") 
+ggsave("accuracy_preceding_infreq.eps", height = 3, width = 5.5)
+```
+
+Error types
+```{r create comission and omission error distinction}
+encoding[is.na(rt), error_type := 'omission']
+encoding[!is.na(rt) & acc == 0, error_type := 'comission']
+```
+
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+# age x error type to predict RT overall
+errortypes_attention_group <- encoding[, summaryh(lmer(pre_smoothed_deviance_scaled  ~ error_type * groupEC + (1|participant)))]
+
+# age x error type to predict RT on frequent trials
+errortypes_attention_group_freq  <- encoding[classifyEnc == 'nonliving', summaryh(lmer(pre_smoothed_deviance_scaled  ~ error_type * groupEC + (1|participant)))]
+
+# age x error type to predict RT on infrequent trials
+errortypes_attention_group_infreq <- encoding[classifyEnc == 'living', summaryh(lmer(pre_smoothed_deviance_scaled  ~ error_type * groupEC + (1|participant)))]
+```
+
+Are people more likely to make omission errors in poor attentional states
+```{r eval = FALSE, include = FALSE, echo = FALSE }
+encoding[, summaryh(lmer(pre_smoothed_deviance_scaled  ~  error_type + (1|participant))), by = group]
+
+preceding_deviance_error_type <- encoding[!is.na(error_type) & !is.na(pre_smoothed_deviance), .(preceding_deviance = mean(pre_smoothed_deviance, na.rm=T)), by = .(participant, group, error_type)]
+
+toPlot <- seWithin(data = preceding_deviance_error_type, measurevar = "preceding_deviance", betweenvars = 'group', idvar = 'participant', withinvars = 'error_type')
+
+ggplot(toPlot, aes(group, preceding_deviance, col = error_type)) +
+geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = preceding_deviance - se, ymax = preceding_deviance + se), position = position_dodge(width = 0.5), width = 0, size = 1)  +
+  ggtheme
+ggsave("comission-omission.png", height = 3, width = 5)
+```
+
+overall collapsed across trials
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+continuous_attention_accuracy_children.m = glmer(acc ~ pre_smoothed_deviance_scaled + (1|participant), family  = "binomial", data = encoding[!error_type %in% c("omission") & group == "Adults",]); summaryh(continuous_attention_accuracy_children.m)
+
+# Age differences
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * groupEC + (1|participant), family  = "binomial", data = encoding[!error_type %in% c("comission"),]); summaryh(continuous_attention_accuracy_age_interaction.m)
+
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * groupEC + (1|participant), family  = "binomial", data = encoding[!error_type %in% c("omission"),]); summaryh(continuous_attention_accuracy_age_interaction.m)
+```
+
+
+######################
+Memory analysis #####
+######################
+
+Group differences in d prime high confidence 
+```{r calc dprime}
+recognition <- fread(file = '../data_clean/recognition.csv')
+recognition[, groupEC := ifelse(group == "Children", -0.5, 0.5)]
+recognition[, trialTypeEC := ifelse(classifyEnc == "living", -0.5, 0.5)]
+
+# age group variables
+recognition[, groupC := group]
+recognition[, groupA := group]
+recognition$groupA <- relevel(as.factor(recognition$groupA), ref = "Adults")
+recognition$groupC <- relevel(as.factor(recognition$groupC), ref = "Children")
+
+# trial type variable
+#recognition[, trialTypeEC := classifyEncEC]
+recognition[, trialTypeI := classifyEnc]
+recognition[, trialTypeF := classifyEnc]
+recognition$trialTypeI <- relevel(as.factor(recognition$trialTypeI), ref = "living")
+recognition$trialTypeF <- relevel(as.factor(recognition$trialTypeF), ref = "nonliving")
+
+#overall d prime
+Dprime.hc <- recognition[, dprime(hits = memoryHits_dprime, false_alarms = false_alarm_dprime, na.rm = T), by = .(participant, group, groupEC, groupA, groupC)]
+
+#by trial type
+dprime.hc_trialtype <- recognition[, dprime(hits = memoryHits_dprime, false_alarms = false_alarm_dprime, na.rm = T), by = .(participant, group, groupEC, groupA, groupC, trialTypeI, trialTypeF, trialTypeEC)]
+```
+
+```{r dprime by trial type}
+# frequent vs. infrequent trials
+dprime.hc_trialtype[, dprimeC := scale(dprime, scale = F)]
+
+dprime.hc_trialtype[!participant %in% c(outlier$participant), summaryh(lmer(dprime ~ groupEC * trialTypeEC + (1|participant)))][term != '(Intercept)']
+
+dprime.hc_trialtype[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ trialTypeEC + (1|participant))), by = group][term != '(Intercept)']
+```
+
+```{r dprime figure}
+# summary
+# overall
+ggplot(Dprime.hc[!participant %in% c(outlier$participant)], aes(group, dprime, fill = as.factor(group))) +
+  geom_violin(trim = F) +
+      geom_quasirandom(width  = .2, size = 1) +
+  ggtheme +
+  labs(x = "", y = "D prime") +
+scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0) + 
+  ylim(0.5,4)
+#ggsave(filename = "Hc_dprime_group.eps", height = 3, width = 5)
+
+# nonliving trials
+ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeF == 'nonliving'], aes(group, dprime, fill = as.factor(group))) +
+  geom_violin(trim = F) +
+      geom_quasirandom(width  = .2, size = 1) +
+  ggtheme +
+  labs(x = "", y = "D prime") +
+scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0) + 
+  ylim(0.5,4)
+#ggsave(filename = "Hc_dprime_group_NONLIVING.eps", height = 3, width = 5)
+
+# living trials
+ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeI == 'living'], aes(group, dprime, fill = as.factor(group))) +
+  geom_violin(trim = F) +
+      geom_quasirandom(width  = .2, size = 1) +
+  ggtheme +
+  labs(x = "", y = "D prime") +
+scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0) +
+    ylim(0.15,4.5)
+#ggsave(filename = "Hc_dprime_group_LIVING.eps", height = 3, width = 5)
+```
+
+```{r dprime figure by age and trial type}
+ggplot(dprime.hc_trialtype, aes(group, dprime, col = group)) + 
+  geom_violin(trim = F) +
+      geom_quasirandom(width  = .2, size = 1) +
+  ggtheme +
+  labs(x = "", y = "d prime") +
+#scale_color_manual(breaks = c(1, -1), values = c("turquoise3", "violetred1")) +
+  stat_summary(color = 'black')  + 
+  facet_wrap(~trialTypeF)
+
+ggplot(dprime.hc_trialtype, aes(group, dprime, col = group)) + 
+  #geom_violin(trim = F) +
+      #geom_quasirandom(width  = .2, size = 1) +
+  ggtheme +
+  labs(x = "", y = "d prime") +
+scale_color_manual(values = c("darkblue", "mediumvioletred")) +
+  stat_summary()  + 
+  facet_wrap(~trialTypeF) 
+#ggsave(filename = "dprime_frequent.png", height = 5, width = 5)
+```
+
+Add birthdays and age
+```{r}
+birthdays <- fread("/Users/alexandradecker/Dropbox/Projects/sustainedAttention/participant tracking/Chidren_ages.csv")
+encoding$birthday <- NULL
+encoding$Date <- NULL
+encoding$age_exact <- NULL
+encoding <- left_join(encoding, birthdays)
+encoding[participant == 200, age_exact := 8]
+
+encoding[group == "Children", unique(age_exact), by = .(participant, age)]%>%arrange(age)
+
+
+# join data d prime data with ages
+dprime.hc_trialtype <- left_join(dprime.hc_trialtype, encoding[, .N, by = .(participant, age, age_exact)][, .(participant, age, age_exact)])
+Dprime.hc <- left_join(Dprime.hc, encoding[, .N, by = .(participant, age, age_exact)][, .(participant, age, age_exact)])
+```
+
+```{r d prime by age in children}
+Dprime.hc[group == "Children" & !participant %in% c(outlier$participant), summaryh(lm(dprime ~ age_exact))] # no effect
+```
+
+#### Memory and age mediation ####
+```{r overall accuracy}
+#acme: mediated (ab) effect
+#ade: direct effect (c')
+#total effect: c
+
+Dprime.hc <- left_join(Dprime.hc, percents[, .(participant, percentOut)])
+dprime.hc_trialtype <- left_join(dprime.hc_trialtype, percents)
+dprime.hc_trialtype[group == "Children", age_exactZ := scale(age_exact)]
+Dprime.hc[group == "Children", age_exactZ := scale(age_exact)]
+Dprime.hc[, percentOutZ := scale(percentOut)]
+
+# mediation analysis by age in children
+model.y_all = lm(dprime ~ age_exactZ + percentOutZ, data = Dprime.hc[group == "Children" & !participant %in% c(outlier$participant)])
+summary(model.y_all)
+model.m_all = lm(percentOutZ ~ age_exactZ, data = Dprime.hc[group == "Children" & !participant %in% c(outlier$participant)])
+summary(model.m_all)
+model.mediate_attention_accuracy_all = mediate(model.m_all, model.y_all, sims = 500, treat = 'age_exactZ', mediator = 'percentOutZ', boot = TRUE)
+summary(model.mediate_attention_accuracy_all)
+
+#get standard errors
+source( "http://page-gould.com/scripts/r/mediations_patch.r") # Needed to update the mediations function
+standard.errors(model.mediate_attention_accuracy_all)
+
+#get effect size of models
+library(hausekeep)
+es(r = 0.15)
+es(r = 0.56)
+
+### Infrequent trials only ###
+# mediation analysis by age in children
+dprime.hc_trialtype$percentOutZ <- NULL
+dprime.hc_trialtype <- left_join(dprime.hc_trialtype, Dprime.hc[, .(participant, percentOutZ)])
+
+dprime.hc_trialtype$trialTypeI
+model.y_all = lm(dprime ~ group + percentOut, data = dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeI == 'living'])
+summary(model.y_all)
+model.m_all = lm(percentOut ~ group, data = dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeI == 'living'])
+summary(model.m_all)
+model.mediate_attention_accuracy_all = mediate(model.m_all, model.y_all, sims = 500, treat = 'group', mediator = 'percentOut', boot = TRUE)
+summary(model.mediate_attention_accuracy_all)
+
+#get standard errors
+source( "http://page-gould.com/scripts/r/mediations_patch.r") # Needed to update the mediations function
+standard.errors(model.mediate_attention_accuracy_all)
+
+#get effect size of models
+library(hausekeep)
+es(r = 0.15)
+es(r = 0.56)
+```
+
+#########################################################
+Correlations between d prime and time out of the zone 
+########################################################
+
+Join data
+```{r join dprime to time out data}
+# join variables to overall dprime dataframe
+percents[, percentOutC := scale(percentOut, scale=F)]
+percents_dprime.hc = left_join(Dprime.hc, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
+percents_dprime.hc = left_join(percents_dprime.hc, numOutChunks)
+percents_dprime.hc = left_join(percents_dprime.hc, median_length_lapse)
+
+# join variables to dataframe by trial types
+percents_dprime.hc_trialtype = left_join(dprime.hc_trialtype, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
+percents_dprime.hc_trialtype = left_join(percents_dprime.hc_trialtype, numOutChunks)
+percents_dprime.hc_trialtype = left_join(percents_dprime.hc_trialtype, median_length_lapse)
+```
+
+Run correlations
+```{r overall - collapsed across trial types}
+# dprime correlations with percent out
+percents_dprime.hc[, percentOutC := scale(percentOut, scale = F)]
+
+percents[, poop := outliersZ(percentOut, zCutOff = 3, replaceOutliersWith = NA), by =group]
+percents[is.na(poop)]
+
+
+# modelss
+# no interactions with trial type
+dprime_percent_out_group.m <- lmer(dprime ~ percentOutC * groupEC * trialTypeEC + (1|participant), data = percents_dprime.hc_trialtype[!participant %in% c(outlier$participant)]); summaryh(dprime_percent_out_group.m)
+
+# run simpler model without trial type
+percents_dprime.hc <- percents_dprime.hc%>%distinct()
+dprime_percent_out_group.m <- lm(dprime ~ percentOutC * groupEC, data = percents_dprime.hc[!participant %in% c(outlier$participant)]); summaryh(dprime_percent_out_group.m)
+
+# separately for children and adults
+percents_dprime.hc[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ percentOutC)), by = group][!term == "(Intercept)"]
+
+# for completedness, separately for children and adults and trial types
+percents_dprime.hc_trialtype[, summaryh(lm(dprime ~ percentOutC)), by = .(group, trialTypeEC)][!term == "(Intercept)"]
+```
+
+```{r figure attentional lapse rate and memory relationships by group}
+ggplot(percents_dprime.hc[!participant %in% c(outlier$participant)], aes(percentOut *100, dprime, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "D prime") +
+  #scale_x_continuous(breaks = c(0, .2, .4, .6, 0.8), labels = c(0, 20, 40, 60, 80)) +
+  scale_y_continuous(breaks = c(1, 2, 3), labels = c(1, 2, 3)) +
+  #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
+  scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0)
+#ggsave( file = "dprime_percent_out_group_fig_all.png", width = 5, height = 3)
+
+percents_dprime.hc_trialtype
+# frequent
+
+ggplot(percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeEC == 0.5], aes(percentOut *100, dprime, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Lapse rate (%)", y = "D prime") +
+  #scale_x_continuous(breaks = c(0, .2, .4, .6, 0.8), labels = c(0, 20, 40, 60, 80)) +
+  scale_y_continuous(breaks = c(1, 2, 3), labels = c(1, 2, 3)) +
+  #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
+  scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0) #+ 
+  #coord_cartesian(ylim = c(0.5,3.5))
+ggsave( file = "dprime_percent_out_group_fig_frequent.png", width = 4, height = 2.5)
+
+
+
+# infrequent
+ggplot(percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeEC == -0.5], aes(percentOut *100, dprime, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Lapse rate (%)", y = "D prime") +
+  #scale_x_continuous(breaks = c(0, .2, .4, .6, 0.8), labels = c(0, 20, 40, 60, 80)) +
+  scale_y_continuous(breaks = c(1, 2, 3), labels = c(1, 2, 3)) +
+  #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
+  scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = 0)
+ggsave( file = "dprime_percent_out_group_fig_infrequent.png", width = 4, height = 2.5)
+```
+
+################
+D-prime by zone 
+################
+
+```{r overall - look at dprime in different zones}
+encoding <- left_join(encoding, percents_dprime.hc[, .(participant, false_alarm_rate)])
+encoding <- left_join(encoding, recognition[, .(participant, stimulus, memory_hitsHC = memoryHits_dprime)])
+hits_by_zone <- encoding[, .(hit_rate = mean(memory_hitsHC, na.rm=T)), by = .(participant, group, zone, false_alarm_rate)]
+hits_by_zone[, dprime := qnorm(hit_rate) - qnorm(false_alarm_rate)]
+
+hits_by_zone[, zoneEC := ifelse(zone == 1, 0.5, -0.5)]
+hits_by_zone[, groupEC := ifelse(group == "Children", -0.5, 0.5)]
+hits_by_zone[!participant %in% c(outlier$participant), summaryh(lmer(dprime ~ zoneEC * groupEC + (1|participant)))][term != "(Intercept)"]
+
+hits_by_zone[!participant %in% c(outlier$participant), summaryh(lmer(dprime ~ zone + (1|participant))), by = group][term != "(Intercept)"]
+
+
+hits_by_zone[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ groupEC)), by = zoneEC][term != "(Intercept)"]
+
+hits_by_zone.p <- seWithin(data = hits_by_zone, measurevar = "dprime", betweenvars = 'group', withinvars = 'zone', idvar = 'participant')
+
+ggplot(hits_by_zone, aes(as.factor(zone), dprime, fill = group)) +
+  geom_violin(trim = F, width = 0.78) +
+      geom_quasirandom(width  = .2, size =.7 ) +
+  scale_x_discrete(breaks = c(0, 1), labels = c("in", "out")) +
+  #stat_summary(position = position_nudge(0.45)) +
+  ggtheme +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  labs(y = "D prime", x = " ") +
+  facet_wrap(~group) + 
+  theme(legend.position = 0)
+#ggsave( file = "dprime_by_zone.eps", width = 8, height = 3)
+
+ggplot(hits_by_zone, aes(as.factor(group), dprime, color = as.factor(zone))) +
+ stat_summary(position = position_dodge(width = 0.5), size = 1) +
+scale_color_viridis_d(begin = 0.2, end = 0.8, option = 'magma') +
+  labs(y = "D prime", x = "Group") +
+  ggtheme
+ggsave( file = "dprime_by_zone.eps", width = 5, height = 3)
+```
+
+```{r by trial type -  look at dprime in different zones}
+hits_by_zone_trialtype <- encoding[, .(hit_rate = mean(memory_hitsHC, na.rm=T), .N), by = .(participant, group, zone, trialType = classifyEnc, groupEC)]
+hits_by_zone_trialtype <- left_join(hits_by_zone_trialtype, dprime.hc_trialtype[, .(participant, trialType = trialTypeI, false_alarm_rate)])
+
+hits_by_zone_trialtype[hit_rate == 1, hit_rate := N/(N+0.5)]
+hits_by_zone_trialtype[hit_rate == 0, hit_rate := 1/(N+0.5)]
+hits_by_zone_trialtype[, dprime := qnorm(hit_rate) - qnorm(false_alarm_rate)]
+hits_by_zone_trialtype[, trialTypeEC := ifelse(trialType == "living", -0.5, 0.5)]
+hits_by_zone_trialtype[, zoneEC := ifelse(zone == 1, 0.5, -0.5)]
+
+hits_by_zone_trialtype[!participant %in% c(outlier$participant), summaryh(lmer(dprime ~ zoneEC * groupEC * trialTypeEC + (1|participant)))][term != "(Intercept)"]
+
+
+
+hits_by_zone_trialtypee.p <- seWithin(data = hits_by_zone_trialtype, measurevar = "dprime", betweenvars = 'group', withinvars = c('zone', "classifyEnc"), idvar = 'participant')
+
+
+ggplot(hits_by_zone_trialtype[trialType == 'nonliving'], aes(as.factor(zone), dprime, fill = group)) +
+  geom_violin(trim = F, width = 0.78) +
+      geom_quasirandom(width  = .2, size =.7 ) +
+  scale_x_discrete(breaks = c(0, 1), labels = c("in", "out")) +
+  #stat_summary(position = position_nudge(0.45)) +
+  ggtheme +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  labs(y = "D prime", x = " ") +
+  facet_wrap(~group) + 
+  theme(legend.position = 0)
+ggsave( file = "dprime_by_zone.eps", width = 8, height = 3)
+
+hits_by_zone_trialtype[, zone := ifelse(zoneEC == 0.5, "Out", "in")]
+ggplot(hits_by_zone_trialtype, aes(as.factor(group), dprime, col = as.factor(zone))) +
+stat_summary(position = position_dodge(width = 0.5), size = 1) +
+scale_color_viridis_d(begin = 0.2, end = 0.8, option = 'magma') +
+  labs(y = "D prime", x = "Group") +
+  ggtheme + 
+  facet_wrap(~trialType)
+ggsave( file = "dprime_by_zone_livinig.eps", width = 8, height = 3)
+```
+
+
+####################
+Memory hits by zone 
+###################
+
+```{r join recognition memory data with encoding data}
+encoding <- left_join(encoding, recognition[classifyMemory == 'old', .(participant, stimulus, choiceMemory, ratingConfidence)])
+encoding[ratingConfidence %in% c(3,4) & choiceMemory == 'old', memory_hitsHC := 1]
+encoding[ratingConfidence %in% c(3,4) & choiceMemory == 'new', memory_hitsHC := 0]
+```
+
+```{r calculate memory hits by zone}
+# hits by zone 
+encoding[, zoneEC := ifelse(zone == 1, 0.5, -0.5)]
+hits_by_zone <- encoding[!is.na(memory_hitsHC), .(memory_hits = mean(memory_hitsHC, na.rm=T)), by = .(participant, group, zoneEC)]
+dprime_by_zone <- left_join(hits_by_zone, Dprime.hc[, .(participant, false_alarm_rate)])
+dprime_by_zone[, dprime_by_zone := qnorm(memory_hits) - qnorm(false_alarm_rate)]
+dprime_by_zone[, groupEC := ifelse(group == "Children", -0.5, 0.5)]
+
+
+# hits by zone and trial type
+dprime_by_zone_trialtype <- encoding[!is.na(memory_hitsHC), .(memory_hits = mean(memory_hitsHC, na.rm=T), .N), by = .(participant, group, trialTypeEC, zoneEC)]
+dprime_by_zone_trialtype <- left_join(dprime_by_zone_trialtype, dprime.hc_trialtype[, .(participant, trialTypeEC, false_alarm_rate)])
+dprime_by_zone_trialtype[, dprime_by_zone := qnorm(memory_hits) - qnorm(false_alarm_rate)]
+dprime_by_zone_trialtype[, groupEC := ifelse(group == "Children", -0.5, 0.5)]
+dprime_by_zone_trialtype[, zoneEC := ifelse(zone == 1, 0.5, -0.5)]
+```
+
+```{r fit models}
+# overall
+dprime_by_zone[!participant %in% c(outlier$participant), summaryh(lmer(dprime_by_zone ~ zoneEC * groupEC + (1|participant)))][!term == "(Intercept)"]
+dprime_by_zone[!participant %in% c(outlier$participant), summaryh(lmer(dprime_by_zone ~ zoneEC + (1|participant))), by = .(group)][!term == "(Intercept)"]
+
+#separately for frequent and infrequent trials 
+dprime_by_zone_trialtype[, .N, by = participant]
+hits_by_zone_trialtype[!participant %in% c(outlier$participant), summaryh(lmer(dprime_by_zone ~ zoneEC * group * classifyEncEC+ (1|participant)))][!term == "(Intercept)"]
+
+hits_by_zone_trialtype[!participant %in% c(outlier$participant), summaryh(lmer(dprime_by_zone ~ zoneEC + (1|participant))), by = .(group, classifyEnc)][!term == "(Intercept)"]
+
+hits_by_zone_trialtype[!participant %in% c(outlier$participant), summaryh(lm(dprime_by_zone ~ zone))]
+```
+
+Are those with the poorest memory (20% worst) as good as the best kids when in the zone?
+```{r}
+kids_Dprime.hc <- percents_dprime.hc[group == "Children" & !participant %in% c(outlier$participant)]%>%arrange(dprime)
+worst10_perc <- head(kids_Dprime.hc, 24)$participant
+best10_perc <- tail(kids_Dprime.hc, 24)$participant
+
+dprime_by_zone$level <- NULL
+dprime_by_zone[participant %in% c(worst10_perc), level := "worst"]
+dprime_by_zone[participant %in% c(best10_perc), level := "best"]
+dprime_by_zone[, zone := ifelse(zoneEC == 0.5, "Out", "In")]
+
+ggplot(dprime_by_zone[!is.na(level)], aes(as.factor(level), dprime_by_zone, col = as.factor(zone))) + stat_summary(position = position_dodge(width = 0.5), size = 1) + 
+  ggtheme + 
+  labs(y = "d'", x = " ")
+ggsave(filename = "best_worse.eps", height = 3, width = 5)
+
+dprime_by_zone[zoneEC == 0.5, summaryh(lm(dprime_by_zone ~ level))]
+dprime_by_zone[zoneEC == -0.5, summaryh(lm(dprime_by_zone ~ level))]
+dprime_by_zone[zoneEC == -0.5, summaryh(lm(dprime_by_zone ~ zoneEC))]
+hits_by_zone_trialtype[zoneEC == 1, summaryh(lm(dprime_by_zone ~ level))]
+```
+
+Are those with the poorest memory (20% worst) as good as the best kids when their RT data is particuarly not deviant
+```{r}
+encoding <- encoding[, ]%>%arrange(participant, pre_smoothed_deviance_scaled)
+encoding$deviance_categorizaton <- NULL
+
+participants <- encoding[, unique(participant)]
+for (i in participants) {
+  numTrials <- encoding[participant == i & !is.na(pre_smoothed_deviance_scaled), .N]
+  num_in_and_out  <- round(numTrials * .20 )
+  toAssign <- c(rep("less", num_in_and_out), rep("medium", numTrials - num_in_and_out *2), rep("more", num_in_and_out))
+  encoding[participant == i & !is.na(pre_smoothed_deviance_scaled), deviance_categorizaton := toAssign]
+}
+
+encoding[deviance_categorizaton %in% c("medium", "less"), deviance_categorization2 := "low"]
+encoding[deviance_categorizaton %in% c("more"), deviance_categorization2 := "high"]
+
+encoding[!is.na(deviance_categorization2),  .N, by = .(participant, deviance_categorization2)]
+
+
+
+
+
+encoding <- encoding[, ]%>%arrange(participant, pre_smoothed_deviance_scaled)
+encoding$deviance_categorizaton
+
+#fast, medium, slow
+encoding <- encoding[, ]%>%arrange(participant, pre_smoothed_RT_scaled)
+participants <- encoding[, unique(participant)]
+for (i in participants) {
+  numTrials <- encoding[participant == i & !is.na(pre_smoothed_RT_scaled), .N]
+  num_in_and_out  <- round(numTrials * .20 )
+  toAssign <- c(rep("fast", num_in_and_out), rep("medium", numTrials - num_in_and_out *2), rep("slow", num_in_and_out))
+  encoding[participant == i & !is.na(pre_smoothed_RT_scaled), rt_categorizaton := toAssign]
+}
+
+encoding <- encoding[, ]%>%arrange(participant, pre_smoothed_RT_scaled)
+encoding[, .(participant, pre_smoothed_RT_scaled, rt_categorizaton)]
+
+rt_cat_memory <- encoding[!is.na(rt_categorizaton), .(memory_hits = mean(memory_hits, na.rm=T)), by = .(participant, group, rt_categorizaton)]
+
+
+rt_cat_memory.p <- seWithin(data =rt_cat_memory, measurevar = "memory_hits", betweenvars = "group", withinvars = "rt_categorizaton", idvar = "participant")
+
+ggplot(rt_cat_memory, aes(group, memory_hits, col = rt_categorizaton)) + 
+  stat_summary(position = position_dodge(width =  0.5)) + 
+  ggtheme + 
+  labs(col = "Preceding RT bin", y = "Memory hits")
+
+
+# deviance
+encoding[, unique(deviance_categorization2)]
+rt_deviance_cat_memory <- encoding[!is.na(deviance_categorization2), .(memory_hits = mean(memory_hits, na.rm=T)), by = .(participant, group, deviance_categorization2, classifyEnc)]
+rt_deviance_cat_memory.p <- seWithin(data = rt_deviance_cat_memory, measurevar = "memory_hits", betweenvars = "group", withinvars = c("deviance_categorization2", "classifyEnc"), idvar = "participant")
+
+ggplot(rt_deviance_cat_memory, aes(group, memory_hits, col = deviance_categorization2)) + 
+  stat_summary(position = position_dodge(width =  0.5)) + 
+  ggtheme + 
+  labs(col = "Preceding RT deviance bin", y = "Memory hits") + 
+facet_wrap(~classifyEnc)
+
+
+
+
+
+# worst versus best child participants:
+worst10_perc <- head(kids_Dprime.hc, 25)$participant
+best10_perc <- tail(kids_Dprime.hc, 25)$participant
+encoding$level <- NULL
+encoding[participant %in% c(worst10_perc), level := "worst"]
+encoding[participant %in% c(best10_perc), level := "best"]
+
+toAddWorst <- encoding[level == "worst" & deviance_categorizaton == "less", .(memory_hits = mean(memory_hitsHC, na.rm=T)), by = .(participant, level)]
+toAddBest <- encoding[level == "best", .(memory_hits = mean(memory_hitsHC, na.rm=T)), by = .(participant, level)]
+
+df_worstBest <- rbind(toAddWorst, toAddBest)
+df_worstBest <- left_join(df_worstBest, Dprime.hc[, .(participant, false_alarm_rate)])
+
+df_worstBest[, corrected_hits := memory_hits - false_alarm_rate]
+df_worstBest[, summaryh(lm(corrected_hits ~ level))]
+
+
+encoding[!is.na(deviance_categorization2), summaryh(lmer(memory_hitsHC ~ level + (1|participant))), by = deviance_categorization2][!term %in% c("(Intercept)")]
+
+encoding[!is.na(level), summaryh(lmer(memory_hitsHC ~ deviance_categorization2  + (1|participant))), by = level][!term %in% c("(Intercept)")]
+
+encoding[!is.na(level), levelEC := ifelse(level == "worst", -1, 1)]
+encoding[!is.na(deviance_categorization2), deviance_categorization2EC := ifelse(deviance_categorization2 == "lower", -1, 1)]
+
+encoding[!is.na(level), summaryh(lmer(memory_hitsHC ~ deviance_categorization2EC * levelEC + (1|participant)))][!term %in% c("(Intercept)")]
+
+
+toPlot <- encoding[!is.na(deviance_categorization2) & !is.na(level), .(memory_hits = mean(memory_hitsHC, na.rm=T)), by = .(participant, deviance_categorization2, level, trialType)]
+
+toPlot <- left_join(toPlot, Dprime.hc[, .(participant, false_alarm_rate)])
+toPlot[, corrected_hits := memory_hits - false_alarm_rate]
+
+toPlot <- seWithin(data = toPlot, measurevar = "corrected_hits", betweenvars = "level", withinvars = c("deviance_categorization2", "trialType"), idvar = "participant")
+
+ggplot(toPlot[trialType == "nonliving"], aes(level, corrected_hits, col = deviance_categorization2)) + 
+  stat_summary() 
+
+
+# calculate d prime - or corrected hits
+```
+
+
+#####################################################
+K means clustering of adults for exploratory analyses 
+#####################################################
+
+
+```{r split adults using k means clustering based on time out of the zone}
+
+# join clusters to percent out and dprime data
+# overall memory 
+percents_dprime.hc$kmeansGroup <- NULL
+adult_clusters <- left_join(percents_dprime.hc[group == "Adults" & !participant %in% c(outlier$participant)], dataToCluster[, .(participant, kmeansGroup)])
+
+adult_clusters[!participant %in% outlier$participant, 
+               summaryh(lm(dprime ~ percentOutC)), 
+               by = kmeansGroup]
+
+# by trial type memory
+percents_dprime.hc_trialtype$kmeansGroup <- NULL
+percents_dprime.hc_trialtype <- left_join(percents_dprime.hc_trialtype, adult_clusters[, .(participant, kmeansGroup)])
+
+percents_dprime.hc_trialtype[, mean(percentOut), by = .(kmeansGroup, group)]
+percents_dprime.hc_trialtype[, .N, by = .(kmeansGroup, group)]
+
+percents_dprime.hc_trialtype[, mean(dprime), by = .(kmeansGroup, group)]
+percents_dprime.hc_trialtype[, .N, by = .(kmeansGroup, group)]
+percents_dprime.hc <- left_join(percents_dprime.hc, percents_dprime.hc_trialtype[, .(participant, kmeansGroup)])
+
+percents_dprime.hc_trialtype[, summaryh(lm(dprime ~ percentOutC)), by = .(trialTypeEC, kmeansGroup)][term != "(Intercept)" & !is.na(kmeansGroup)]
+percents_dprime.hc <- distinct(percents_dprime.hc)
+percents_dprime.hc[, .N ,by = participant]
+percents_dprime.hc[percentOut < 0.6, summaryh(lm(dprime ~ percentOutC)), by = .(kmeansGroup)][term != "(Intercept)" & !is.na(kmeansGroup)]
+
+percents_dprime.hc_trialtype[!kmeansGroup %in% c(2), summaryh(lm(dprime ~ percentOutC * groupEC)), by = .(trialTypeEC)][term != "(Intercept)"]
+```
+
+Join to classification data
+Re-fit classification and accuracy models:
+```{r}
+percents_trialtype <- left_join(percents_trialtype, percents_dprime.hc_trialtype[, .(kmeansGroup = unique(kmeansGroup)), by = participant])
+
+percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroup == 2, n_distinct(participant), by = group]
+
+
+# big model
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeEC * groupEC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant)]); summaryh(percentOut_accuracy.m)
+
+# model for adults
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeEC * groupA + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroup == 2]); summaryh(percentOut_accuracy.m)
+
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeF * groupA + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroup == 2]); summaryh(percentOut_accuracy.m)
+
+# model for children
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeF * groupC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant) & !kmeansGroup == 2]); summaryh(percentOut_accuracy.m)
+```
+
+Fit model lapse rate ~ d prime that includes children and adults that look like children:
+```{r}
+percents_dprime.hc_trialtype[group == "Children", kmeansGroup := 3]
+dprime_percent_out_group.m <- lmer(dprime ~ percentOutC * groupA * trialTypeEC + (1|participant), data = percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & !kmeansGroup ==2,]); summaryh(dprime_percent_out_group.m)
+```
+
+```{r plot cluster data}
+### plot relationships in each cluster for overall memory time out relationships###
+ggplot(adult_clusters, aes(percentOut*100, dprime, col = as.factor(kmeansGroup)))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(data = adult_clusters[kmeansGroup == 1], formula = y ~ x, method = "lm") +
+  stat_smooth(data = adult_clusters[kmeansGroup == 2], formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "D prime") +
+  scale_color_manual(values = c("royalblue1", "blue4")) +
+  theme(legend.position = 0)
+ggsave("memory_attention_cor.clusters.png", height = 3, width =5)
+
+
+# frequent trial memory time out relationship
+ggplot(percents_dprime.hc_trialtype[!is.na(kmeansGroup) & trialTypeF == 'nonliving' & group == "Adults"], 
+       aes(percentOut, dprime, col = as.factor(kmeansGroup)))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(data = adult_clusters[kmeansGroup == 1], formula = y ~ x, method = "lm") +
+  stat_smooth(data = adult_clusters[kmeansGroup == 2], formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "D prime") + 
+    scale_color_manual(values = c("royalblue1", "blue4"))  + 
+  theme(legend.position = 0) + 
+  coord_cartesian(ylim = c(1, 3)) 
+ggsave("memory_attention_cor.clusters_frequent.png", height = 3, width =5)
+
+
+# infrequent trial memory time out relationship
+ggplot(percents_dprime.hc_trialtype[!is.na(kmeansGroup) & trialTypeI == 'living' & group == "Adults"], aes(percentOut, dprime, col = as.factor(kmeansGroup)))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(data = adult_clusters[kmeansGroup == 1], formula = y ~ x, method = "lm") +
+  stat_smooth(data = adult_clusters[kmeansGroup == 2], formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "D prime")+ 
+    scale_color_manual(values = c("royalblue1", "blue4"))  + 
+  theme(legend.position = 0)
+ggsave("memory_attention_cor.clusters_infrequent.png", height = 3, width =5)
+```
+
+```{r k means clustering models}
+### run models ###
+# overall memory
+adult_clusters[!participant %in% c(outlier$participant) & group == "Adults", summaryh(lm(dprime ~ percentOut)), by = kmeansGroup][term != '(Intercept)']
+adult_clusters[ group == "Adults", summaryh(lm(dprime ~ percentOutC)), by = kmeansGroup][term != '(Intercept)']
+adult_clusters[!participant %in% c(outlier$participant), .N, by = kmeansGroup]
+
+
+# memory for frequent and infrequent trials
+percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & group == "Adults", summaryh(lm(dprime ~ percentOut)), by = .(kmeansGroup, trialTypeEC)][term != '(Intercept)']
+
+## join to main DF###
+encoding <- left_join(encoding, adult_clusters[, .(participant, kmeansGroup)])
+```
+
+###############################
+Within subject memory analyses 
+##############################
+
+Relating continuous measures of attention to memory hits
+```{r wrangle data}
+recognition[classifyMemory == 'old' & choiceMemory == 'old'  & ratingConfidence %in% c(3, 4), memory_hits := 1]
+recognition[classifyMemory == 'old' & choiceMemory == 'new', memory_hits := 0]
+encoding$memory_hits <- NULL
+encoding = left_join(encoding, recognition[classifyMemory == 'old', .(participant, stimulus, memory_hits)])
+encoding <- left_join(encoding, median_length_lapse)
+encoding <- left_join(encoding, numOutChunks)
+```
+
+```{r models separately for C and A}
+# rt preceding deviance
+fluctuations_hits.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  + trialNoC +  (pre_smoothed_deviance_scaled * classifyEncEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial')), by = .(group, classifyEnc)][term != '(Intercept)']
+fluctuations_hits.m
+
+encoding[, trialNoC := scale(trialNo, scale = F)]
+
+encoding<- left_join(encoding, recognition[classifyMemory ==  "old", .(participant, stimulus, acc_rec = acc)])
+
+fluctuations_hits.m <- encoding[trialNo %in% c(91:200) & trialNo > 5, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  +  (pre_smoothed_deviance_scaled||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial')), by = .(group, classifyEnc)][term != '(Intercept)']
+fluctuations_hits.m
+
+
+#rt preceding deviance interp
+fluctuations_hits.mb <- encoding[trialNo <90, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_interp_scaled + (pre_smoothed_deviance_interp_scaled||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial')), by= .(group, classifyEnc)][term != '(Intercept)']
+```
+
+```{r models - comparing children to adults}
+# overall memory
+fluctuations_hits.m2 <- encoding[trialNo > 5, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEncEC * groupEC + (pre_smoothed_deviance_scaled * classifyEncEC||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+fluctuations_hits.m3 <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_devianceZ * classifyEncEC * groupEC + (pre_smoothed_devianceZ * classifyEncEC||participant), family = 'binomial'))][term != '(Intercept)']
+
+memory_attention_group.m <- glmer(memory_hits ~ pre_smoothed_deviance_Z * trialTypeEC * groupEC + (pre_smoothed_deviance_Z * classifyEncEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial', data = encoding); summaryh(memory_attention_group.m)
+
+
+memory_attention_group.m_children <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * groupEC + (pre_smoothed_deviance_scaled||participant), family = 'binomial', data = encoding[trialTypeI == "nonliving"])
+summaryh(memory_attention_group.m_children)
+
+#chidlen only
+memory_attention_group.m_children <- glmer(memory_hits ~ pre_smoothed_deviance_scaled + (pre_smoothed_deviance_scaled|participant), family = 'binomial', data = encoding[trialTypeI == "nonliving" & group == "Children"]); summaryh(memory_attention_group.m_children)
+
+#adults only
+memory_attention_group.m_children <- glmer(memory_hits ~ pre_smoothed_deviance_scaled + (pre_smoothed_deviance_scaled|participant), family = 'binomial', data = encoding[trialTypeI == "nonliving" & group == "Adults"]); summaryh(memory_attention_group.m_children)
+
+
+# adults
+encoding$group <- relevel(as.factor(encoding$group), ref = "Adults")
+memory_attention_group.m_adults <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEncEC * group + (pre_smoothed_deviance_scaled * classifyEncEC||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_adults)
+
+
+# extract simple slope for age group differences in RT deviance by trial type
+#living
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "living")
+memory_attention_group.m_trialtype <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * groupEC + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype)
+
+# children 
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "living")
+encoding$group <- relevel(as.factor(encoding$group), ref = "Children")
+
+memory_attention_group.m_trialtype_children_infrequent <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype_children_infrequent)
+
+# adults
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "living")
+encoding$group <- relevel(as.factor(encoding$group), ref = "Adults")
+memory_attention_group.m_trialtype_adults_infrequent <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype_adults_infrequent)
+
+############### nonliving ############
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "nonliving")
+memory_attention_group.m_trialtype_nonliving <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * groupEC + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype_nonliving)
+
+# Children
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "nonliving")
+encoding$group <- relevel(as.factor(encoding$group), ref = "Children")
+memory_attention_group.m_trialtype_nonliving_children <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype_nonliving_children)
+
+# Adults
+encoding$classifyEnc <- relevel(as.factor(encoding$classifyEnc), ref = "nonliving")
+encoding$group <- relevel(as.factor(encoding$group), ref = "Adults")
+memory_attention_group.m_trialtype_nonliving_adults <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summaryh(memory_attention_group.m_trialtype_nonliving_adults)
+
+
+# emmeans:
+memory_attention_group.m_emmeans <- glmer(memory_hits ~ pre_smoothed_deviance_scaled * classifyEnc * group + (pre_smoothed_deviance_scaled * classifyEnc||participant), family = 'binomial', data = encoding)
+summary(memory_attention_group.m_emmeans)
+
+Rtdeva <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) + sd(encoding$pre_smoothed_deviance_scaled, na.rm=T)
+Rtdev <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) 
+Rtdevb <- mean(encoding$pre_smoothed_deviance_scaled, na.rm=T) - sd(encoding$pre_smoothed_deviance_scaled, na.rm=T)
+
+mylist <- list(rtDev = c(Rtdeva, Rtdev, Rtdevb), classifyEnc = c("living", "nonliving"), group = c("Adults", "Children"))
+emtrends(memory_attention_group.m_emmeans, ~classifyEnc + group, var = "pre_smoothed_deviance_scaled", at = mylist)
+
+# by trial type
+fluctuations_hits.m2 <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(classifyEnc)][term != '(Intercept)']
+
+
+fluctuations_hits.m2b <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_interp_scaled * group + (pre_smoothed_deviance_interp_scaled||participant), family = 'binomial')), by= .(classifyEnc)][term != '(Intercept)']
+```
+
+### Exploration
+```{r k means figures}
+
+smoothed_deviance_memory_hits <- encoding[!is.na(memory_hits), .(prec_rt_dev = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, memory_hits, classifyEnc, kmeansGroup)]
+deviance_memory_prep.p = seWithin(smoothed_deviance_memory_hits, measurevar = "prec_rt_dev", betweenvars = c("group", "kmeansGroup"), withinvars = c("memory_hits", "classifyEnc"), idvar = "participant")
+
+ggplot(deviance_memory_prep.p[!is.na(memory_hits) & group == "Adults" & !is.na(kmeansGroup)], aes(as.factor(memory_hits), prec_rt_dev, col = classifyEnc)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Preceding RT deviance", x = "Memory hits", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("darkblue", "mediumvioletred")) +
+  scale_x_discrete(labels = c("Forgotten", "Remembered")) +
+  facet_wrap(~group + kmeansGroup)
+
+ggsave(filename = "preceding_rt_memory.png", width  = 10, height = 3)
+
+
+#Figure 2
+encoding[, deviance_level := if_else(condition = pre_smoothed_deviance_scaled > 0, 'high', 'low')]
+
+smoothed_deviance_memory_hits2 <- encoding[!is.na(memory_hits) & !is.na(deviance_level), .(memory_hits = mean(memory_hits, na.rm=T)), by = .(participant, group, deviance_level)]
+
+smoothed_deviance_memory_hits2 = seWithin(smoothed_deviance_memory_hits2, measurevar = "memory_hits", betweenvars = "group", withinvars = "deviance_level", idvar = "participant")
+
+ggplot(smoothed_deviance_memory_hits2, aes(deviance_level, memory_hits, col = group)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = memory_hits - se, ymax = memory_hits + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Memory hits", x = "deviance level; above below mean", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("darkblue", "mediumvioletred")) +
+  scale_x_discrete(labels = c("high", "low"))
+ggsave(filename = "preceding_rt_memory2.png", width  = 5.5, height = 3)
+```
+
+```{r figure - overall memory}
+smoothed_deviance_memory_hits <- encoding[!is.na(memory_hits), .(prec_rt_dev = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, memory_hits)]
+
+deviance_memory_prep.p = seWithin(smoothed_deviance_memory_hits, measurevar = "prec_rt_dev", betweenvars = c("group"), withinvars = c("memory_hits"), idvar = "participant")
+
+ggplot(deviance_memory_prep.p[!is.na(memory_hits)], aes(as.factor(memory_hits), prec_rt_dev, col = group)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size  = 3) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Preceding RT deviance", x = "Memory hits", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("royalblue3", "hotpink3")) +
+  scale_x_discrete(labels = c("Forgotten", "Remembered"))
+ggsave(filename = "preceding_rt_memory.png", width  = 5, height = 3)
+
+
+# option 2
+ggplot(deviance_memory_prep.p[!is.na(memory_hits)], aes(as.factor(group), prec_rt_dev, col = as.factor(memory_hits))) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size  = 3) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Preceding RT deviance", x = "Group", col = " ")+
+  ggtheme +
+scale_color_viridis_d(begin = 0.3, end = 0.5, option = 'magma') +
+  scale_x_discrete(labels = c("Adults", "Children"))
+ggsave(filename = "preceding_rt_memory.png", width  = 5, height = 3)
+```
+
+```{r figures - by trail type}
+encoding[is.na(pre_smoothed_deviance_cat)  & !is.na(pre_smoothed_deviance), ]
+smoothed_deviance_memory_hits <- encoding[!is.na(pre_smoothed_deviance_cat), .(mean_hits = mean(memory_hits, na.rm=T)), by = .(participant, group, classifyEnc, pre_smoothed_deviance_cat)]
+
+false_alarm_rate <- recognition[classifyMemory == "new", .(false_alarm = 1 - mean(acc, na.rm=T), .N), by  = .(participant, classifyEnc)]
+false_alarm_rate[false_alarm == 0, false_alarm := 1/(N + 1)]
+hits_minus_fa <- left_join(smoothed_deviance_memory_hits, false_alarm_rate)
+hits_minus_fa[mean_hits == 1, mean_hits := N/(N+1)]
+hits_minus_fa[, dprime := qnorm(mean_hits) - qnorm(false_alarm)]
+
+deviance_memory_prep.p = seWithin(hits_minus_fa, measurevar = "dprime", betweenvars = c("group"), withinvars = c("pre_smoothed_deviance_cat", "classifyEnc"), idvar = "participant")
+
+ggplot(deviance_memory_prep.p, aes(as.factor(group), dprime, col = prec_rt_dev)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = dprime - se, ymax = dprime + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "d prime", x = "group", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("royalblue3", "hotpink3"), labels = c("high deviance", "low deviance"))  + 
+  facet_wrap(~classifyEnc, scales = "free")
+ggsave(filename = "preceding_rt_memory.png", width  = 10, height = 3)
+```
+
+
+
+# memory figure - more versus least deviant 50% of trials and d prime
+```{r}
+median_dev <- encoding[, .(median_deviance = median(pre_smoothed_deviance, na.rm=T)), by = participant]
+encoding <- left_join(encoding, median_dev)
+encoding[, median_split_dev := ifelse(pre_smoothed_deviance > median_deviance, "high", "low")]
+encoding[, .N, by = .(median_split_dev, participant)]
+
+memory_hits_deviance_split <- encoding[!is.na(median_split_dev), .(memory_hits = mean(memory_hits, na.rm=T), .N), by = .(participant, classifyEnc, median_split_dev, group)]
+dprime_by_median_split_dev <- left_join(memory_hits_deviance_split, false_alarm_rate[, .(participant, false_alarm, classifyEnc)])
+dprime_by_median_split_dev[, range(memory_hits)]
+dprime_by_median_split_dev[memory_hits == 1, memory_hits := N/(N+1)]
+dprime_by_median_split_dev[, dprime := qnorm(memory_hits) - qnorm(false_alarm)]
+
+
+dprime_by_median_split_dev.p <- seWithin(data = dprime_by_median_split_dev, measurevar = "dprime", betweenvars = "group", idvar = "participant", withinvars = c("classifyEnc", "median_split_dev"))
+
+#living
+ggplot(dprime_by_median_split_dev.p[classifyEnc == "living"], aes(group, dprime, col = median_split_dev)) +
+  stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = dprime - se, ymax = dprime + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+  ggtheme +
+  scale_color_manual(breaks = c("high", "low"), labels = c("high deviance", "low deviance"), values = c("seagreen4", "orchid4"))+
+  labs(col = '', y = "Memory perforrmance (d')") +
+theme(legend.position = 0) +
+  coord_cartesian(ylim = c(1.7, 2.15))
+ggsave(file = "living_preceding_deviance.eps", height = 3.5, width = 6)
+
+
+#nonliving
+ggplot(dprime_by_median_split_dev.p[classifyEnc == "nonliving"], aes(group, dprime, col = median_split_dev)) +
+  stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = dprime - se, ymax = dprime + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+  ggtheme +
+  scale_color_manual(breaks = c("high", "low"), labels = c("high deviance", "low deviance"), values = c("seagreen4", "orchid4"))+
+  labs(col = '', y = "Memory perforrmance (d')")+
+theme(legend.position = 0) + 
+  coord_cartesian(ylim = c(1.39, 1.7))
+ggsave(file = "living_preceding_deviance.eps", height = 3.7, width = 6)
+```
+
+
+
+
+
+
+
+
+```{r continuous shifts in attention on different trial types}
+#memory hits by trial type
+fluctuations_hits_trialtype.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + (pre_smoothed_deviance_scaled|participant), family = 'binomial')), by= .(group, classifyEnc)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + (pre_smoothed_deviance_scaled|participant), family = 'binomial')), by= .(classifyEnc)][term != '(Intercept)']
+
+# Figure
+smoothed_deviance_memory_hits_trialtype <- encoding[!is.na(memory_hits), .(prec_rt_dev = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, classifyEnc, memory_hits)]
+
+deviance_memory_prep.p = seWithin(smoothed_deviance_memory_hits_trialtype, measurevar = "prec_rt_dev", betweenvars = "group", withinvars = c("memory_hits", 'classifyEnc'), idvar = "participant")
+
+#frequent
+ggplot(deviance_memory_prep.p[!is.na(memory_hits) & classifyEnc == 'nonliving'], aes(as.factor(group), prec_rt_dev, col = as.factor(memory_hits))) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+  geom_signif(comparisons=list(c(0, 1)), annotations="***") +
+    labs(y = "Preceding RT deviance", x = "Memory hits", col = " ")+
+  ggtheme +
+scale_color_viridis_d(begin = 0.8, end = 0.1, option = 'inferno') +
+  scale_x_discrete(labels = c("Adults", "Children")) +
+  theme(legend.position = 0) + 
+  coord_cartesian(ylim = c(-0.005, 0.008)) 
+ggsave(filename = "preceding_rt_memory_nonliving.eps", width  = 5, height = 3)
+
+
+#infrequent
+ggplot(deviance_memory_prep.p[!is.na(memory_hits) & classifyEnc == 'living'], aes(as.factor(group), prec_rt_dev, col = as.factor(memory_hits))) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+  geom_signif(comparisons=list(c(0, 1)), annotations="***") +
+    labs(y = "Preceding RT deviance", x = "Group", col = " ")+
+  ggtheme +
+scale_color_viridis_d(begin = 0.8, end = 0.1, option = 'inferno') +
+  coord_cartesian(ylim = c(-0.007, 0.03)) + 
+    theme(legend.position = 0)  
+
+ggsave(filename = "preceding_rt_memory_living.eps", width  = 5, height = 3)
+
+#Figure 2
+smoothed_deviance_memory_hits3 <- encoding[!is.na(memory_hits) & !is.na(deviance_level), .(memory_hits = mean(memory_hits, na.rm=T)), by = .(participant, group, deviance_level, classifyEnc)]
+
+smoothed_deviance_memory_hits3 = seWithin(smoothed_deviance_memory_hits3, measurevar = "memory_hits", betweenvars = "group", withinvars =c("deviance_level", "classifyEnc"), idvar = "participant")
+
+ggplot(smoothed_deviance_memory_hits3, aes(deviance_level, memory_hits, col = group)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = memory_hits - se, ymax = memory_hits + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Memory hits", x = "deviance level; above below mean", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("darkblue", "mediumvioletred")) +
+  scale_x_discrete(labels = c("high", "low")) + 
+  facet_wrap(~ classifyEnc)
+ggsave(filename = "preceding_rt_memory3.png", width  = 5.5, height = 3)
+```
+
+```{r basic findings}
+# basic model
+fluctuations_hits_trialtype.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + (pre_smoothed_deviance_scaled|participant), family = 'binomial')), by= .(group, classifyEnc)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + (pre_smoothed_deviance_scaled|participant), family = 'binomial')), by= .(classifyEnc)][term != '(Intercept)']
+
+# Infrequent trial figure
+smoothed_deviance_memory_hits_trialtype <- encoding[!is.na(memory_hits), .(prec_rt_dev = mean(pre_smoothed_deviance_scaled, na.rm=T)), by = .(participant, group, classifyEnc, memory_hits)]
+
+deviance_memory_prep.p = seWithin(smoothed_deviance_memory_hits_trialtype, measurevar = "prec_rt_dev", betweenvars = "group", withinvars = c("memory_hits", 'classifyEnc'), idvar = "participant")
+
+ggplot(deviance_memory_prep.p[!is.na(memory_hits) & classifyEnc == 'living'], aes(as.factor(memory_hits), prec_rt_dev, col = group)) +
+   stat_summary(fun.y = "mean", geom = "point", position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = prec_rt_dev - se, ymax = prec_rt_dev + se), position = position_dodge(width = 0.5), width = 0, size = 1)+
+    labs(y = "Preceding RT deviance", x = "Memory hits", col = " ")+
+  ggtheme +
+scale_color_manual(values = c("darkblue", "mediumvioletred")) +
+  scale_x_discrete(labels = c("Forgotten", "Remembered"))
+ggsave(filename = "preceding_rt_memory_nonliving.png", width  = 6, height = 3)
+```
+
+How can we explain adults encoding memories better in poorer attentional states?
+```{r  covariate - first versus second half of the task}
+
+#### covariate ###
+fluctuations_hits_trialtype_splitHalf.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + split_half + (pre_smoothed_deviance_scaled +split_half||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_splitHalfb.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + split_half + (pre_smoothed_deviance_scaled +split_half||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+### eliminate interaction effect? ###
+fluctuations_hits_trialtype_splitHalf2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + split_half + (pre_smoothed_deviance_scaled +split_half||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+### 2 way interaction term ###
+fluctuations_hits_trialtype_interaction_split_half.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * split_half + (pre_smoothed_deviance_scaled * split_half||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_split_halfb.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * split_half + (1|participant), family = 'binomial'))][term != '(Intercept)']
+
+### 3 way interaction term ###
+fluctuations_hits_trialtype_interaction_group_split_half.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * split_half + (pre_smoothed_deviance_scaled * split_half||participant), family = 'binomial'))][term != '(Intercept)']
+
+interaction_model2_splitHalf <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * split_half + (pre_smoothed_deviance_scaled * split_half +  pre_smoothed_deviance_scaled * split_half||participant), family = 'binomial'))][term != '(Intercept)']
+```
+
+```{r covariate - time spent out of the zone}
+
+#time spent out of the zone
+encoding <- left_join(encoding, percents_dprime.hc[, .(participant, percentOut)])
+
+### covariate ###
+
+fluctuations_hits_trialtype_pout.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + percentOut + (pre_smoothed_deviance_scaled +percentOut||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_pout.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + percentOut + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+### interaction ###
+
+fluctuations_hits_trialtype_interaction_pout.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percentOut + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+
+fluctuations_hits_trialtype_interaction_poutb.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percentOut + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_pout3.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * percentOut + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+interaction_model2_percentOut <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * percentOut + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_percentOut)
+```
+
+```{r covariate - prepotency}
+#prepotency (RT on infrequent vs. frequent trials)
+rt_trialtype_diffs <- spread(encoding[, .(rt = mean(rt, na.rm=T)), by = .(participant, classifyEnc)], key = classifyEnc, value = rt)[, rt_trialtype_diff := living-nonliving]
+
+acc_trialtype_diffs <- spread(encoding[, .(acc = mean(acc, na.rm=T)), by = .(participant, group, classifyEnc)], key = classifyEnc, value = acc)[, acc_trialtype_diff := nonliving- living]
+
+prepotency <- left_join(rt_trialtype_diffs[, .(participant, rt_trialtype_diff)], acc_trialtype_diffs[, .(participant, acc_trialtype_diff, group)])
+
+prepotency[, summaryh(lm(rt_trialtype_diff ~ acc_trialtype_diff + group))]
+prepotency[, summaryh(lm(rt_trialtype_diff ~ acc_trialtype_diff)), by = group]
+encoding <- left_join(encoding, prepotency)
+
+#### Models ####
+
+###### covariate ####
+fluctuations_hits_trialtype_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_prepotencyb.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+##### interaction term ####
+fluctuations_hits_trialtype_interaction_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_prepotencyb.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+### Covariate
+fluctuations_hits_trialtype_prepotency2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + acc_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + acc_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+#### Interaction term
+fluctuations_hits_trialtype_interaction_prepotency2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * acc_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * acc_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_prepotency.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  * acc_trialtype_diff + (pre_smoothed_deviance_scaled ||participant), family = 'binomial'))][term != '(Intercept)'] ###
+
+fluctuations_hits_trialtype_interaction_prepotency2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  * rt_trialtype_diff + (pre_smoothed_deviance_scaled ||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+#plot interaction effect 
+coefficients_to_plot <- coef(glmer(memory_hits ~ pre_smoothed_deviance_scaled  + (pre_smoothed_deviance_scaled ||participant), family = 'binomial', data = encoding[classifyEnc == 'living']))
+coefficients_to_plot <- data.table(coefficients_to_plot$participant)
+coefficients_to_plot <- cbind(coefficients_to_plot[, .(pre_smoothed_deviance_scaled)], encoding[, .N, by = .(participant, group)][, .(participant, group)])
+coefficients_to_plot <- left_join(coefficients_to_plot, encoding[, .(acc_trialtype_diff = unique(acc_trialtype_diff)), by = participant])
+
+ggplot(coefficients_to_plot, aes(acc_trialtype_diff, pre_smoothed_deviance_scaled)) + 
+  geom_jitter() + 
+  stat_smooth(formula = y~ x, method = 'lm')
+
+cor.test(coefficients_to_plot$acc_trialtype_diff, coefficients_to_plot$pre_smoothed_deviance_scaled)
+
+
+interaction_model2_acc_trialtype_diff <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * acc_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_acc_trialtype_diff)
+
+
+interaction_model2_rt_trialtype_diff <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * rt_trialtype_diff + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_rt_trialtype_diff)
+```
+
+```{r covariate: post error slowing}
+encoding[, .(classifyEnc, post_infrequent_trial, post_infrequent_trial2)]
+post_slowing <- spread(encoding[classifyEnc == 'nonliving', .(rt = mean(rt, na.rm=T)), by = .(participant, post_infrequent_trial)], key = post_infrequent_trial, value = rt)
+names(post_slowing)[3] <- 'post frequent'
+names(post_slowing)[2] <- 'post infrequent'
+post_slowing[, slowing := `post infrequent` - `post frequent`]
+encoding <- left_join(encoding, post_slowing[, .(participant, slowing)])
+
+#### Models ####
+###### covariate
+fluctuations_hits_trialtype_slowing.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_slowing.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+
+##### interaction term
+fluctuations_hits_trialtype_interaction_slowing.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_slowing.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+# 3 way
+fluctuations_hits_trialtype_interaction_group_slowing2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+interaction_model2_rt_slowing <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * slowing + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_rt_slowing)
+```
+
+```{r covariate: number of infrequent errors}
+encoding <- left_join(encoding, acc_trialtype_diffs[, .(participant, living_acc = living)])
+
+#### Models ####
+###### covariate
+fluctuations_hits_trialtype_living_acc.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + living_acc + (pre_smoothed_deviance_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_living_acc.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + living_acc + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+##### interaction term
+fluctuations_hits_trialtype_interaction_living_acc.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * living_acc + (1|participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_living_acc.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * living_acc + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+# 3 way
+fluctuations_hits_trialtype_interaction_group_slowing2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * living_acc + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+interaction_model2_living_acc <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * living_acc + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_living_acc)
+```
+
+```{r covariate: number of infrequent trials up to that point}
+# how many previous infrequent trials in the task until that point
+encoding[classifyEnc == 'living', infreq_trialNo := 1:.N, by = .(participant)]
+
+#### Models ####
+###### covariate
+fluctuations_hits_trialtype_infreq_trialNo.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + infreq_trialNo + (pre_smoothed_deviance_scaled +infreq_trialNo||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_infreq_trialNo.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + infreq_trialNo + (pre_smoothed_deviance_scaled +infreq_trialNo||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+##### interaction term
+fluctuations_hits_trialtype_interaction_infreq_trialNo.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * infreq_trialNo + (pre_smoothed_deviance_scaled * infreq_trialNo||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_infreq_trialNo2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * infreq_trialNo + (pre_smoothed_deviance_scaled * infreq_trialNo||participant), family = 'binomial'))][term != '(Intercept)']
+
+# group interaction after controlling for slowing
+fluctuations_hits_trialtype_interaction_group_infreq_trialNo2.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * infreq_trialNo + (pre_smoothed_deviance_scaled* infreq_trialNo||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+interaction_model2_infreq_trialNo <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * infreq_trialNo + (pre_smoothed_deviance_scaled * infreq_trialNo + pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_trialNo)
+```
+
+```{r covariate: number of infrequent trials in the last five trials}
+encoding[, classifyEnc_num := ifelse(classifyEnc == 'living', 1, 0)]
+#moving window 5 trials
+encoding[, `:=` (percent_infreq_last5 = as.vector(lag(roll::roll_mean(as.matrix(classifyEnc_num), width  = 5, min_obs = 1)))), by = participant]
+encoding[, `:=` (percent_infreq_last3 = as.vector(lag(roll::roll_mean(as.matrix(classifyEnc_num), width  = 3, min_obs = 1)))), by = participant]
+
+###### covariate
+fluctuations_hits_trialtype_percent_infreq_last5.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + percent_infreq_last5 + (pre_smoothed_deviance_scaled +percent_infreq_last5||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_percent_infreq_last5.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + percent_infreq_last5 + (pre_smoothed_deviance_scaled  + percent_infreq_last5||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+
+##### interaction term
+fluctuations_hits_trialtype_interaction_percent_infreq_last5.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percent_infreq_last5 + (pre_smoothed_deviance_scaled * percent_infreq_last5||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_percent_infreq_last5.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percent_infreq_last5 + (pre_smoothed_deviance_scaled * percent_infreq_last5||participant), family = 'binomial'))][term != '(Intercept)']
+
+# group interaction after controlling for percent_infreq_last5
+
+fluctuations_hits_trialtype_interaction_group_percent_infreq_last5.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * percent_infreq_last5 + (pre_smoothed_deviance_scaled * percent_infreq_last5||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+interaction_model2_infreq_percent_infreq_last5 <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * percent_infreq_last5 + (pre_smoothed_deviance_scaled * percent_infreq_last5 + pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_percent_infreq_last5)
+
+```
+
+```{r covariate: last 3 trials}
+###### covariate
+fluctuations_hits_trialtype_percent_infreq_last3.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + percent_infreq_last3 + (pre_smoothed_deviance_scaled +percent_infreq_last3||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_percent_infreq_last3.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + percent_infreq_last3 + (pre_smoothed_deviance_scaled +  percent_infreq_last3||participant), family = 'binomial'))][term != '(Intercept)']
+
+##### intreaction
+fluctuations_hits_trialtype_interaction_percent_infreq_last3 <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percent_infreq_last3 + (pre_smoothed_deviance_scaled * percent_infreq_last3||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_percent_infreq_last3b <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * percent_infreq_last3 + (pre_smoothed_deviance_scaled * percent_infreq_last3||participant), family = 'binomial'))][term != '(Intercept)']
+
+# group interaction after controlling for percent_infreq_last5
+fluctuations_hits_trialtype_interaction_group_percent_infreq_last3.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * percent_infreq_last3 + (pre_smoothed_deviance_scaled * percent_infreq_last3||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+interaction_model2_infreq_percent_infreq_last3 <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * percent_infreq_last3 + (pre_smoothed_deviance_scaled * percent_infreq_last3||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_percent_infreq_last3)
+```
+
+```{r covariate: speed}
+###### covariate
+fluctuations_hits_trialtype_pre_smoothed_RT_scaled.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled + pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled ||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_group_pre_smoothed_RT_scaled.m <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group + pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled +  pre_smoothed_RT_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+##### intreaction
+fluctuations_hits_trialtype_interaction_pre_smoothed_RT_scaled <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled||participant), family = 'binomial')), by= .(group)][term != '(Intercept)']
+
+fluctuations_hits_trialtype_interaction_pre_smoothed_RT_scaledb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled ||participant), family = 'binomial'))][term != '(Intercept)']
+
+# group interaction after controlling for percent_infreq_last5
+fluctuations_hits_trialtype_interaction_group_percent_infreq_last3.mb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group * pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled||participant), family = 'binomial'))][term != '(Intercept)']
+
+
+interaction_model2_infreq_pre_smoothed_RT_scaledb <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled + (pre_smoothed_deviance_scaled * pre_smoothed_RT_scaled + pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_pre_smoothed_RT_scaledb)
+```
+
+```{r covariate: living trial accuracy and RT}
+interaction_model2_infreq_acc2 <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * acc + (pre_smoothed_deviance_scaled * acc + pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_acc2)
+
+
+interaction_model2_infreq_RT <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * rtResidual + (pre_smoothed_deviance_scaled * rtResidual||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_RT)
+
+
+interaction_model2_infreq_RT <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  rtResidual + (pre_smoothed_deviance_scaled * rtResidual||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_RT)
+
+
+interaction_model2_infreq_RT <- encoding[classifyEnc == 'nonliving', summaryh(glmer(memory_hits ~ pre_smoothed_RT_scaled  + (pre_smoothed_RT_scaled||participant), family = 'binomial')), by  = group][term != '(Intercept)']; print(interaction_model2_infreq_RT)
+```
+
+```{r covariate: prepotency in the last few trials}
+encoding[, .(rtResidual, pre_smoothed_RT)]
+encoding[classifyEnc=='living', rt_prepotent:= rtResidual - pre_smoothed_RT]
+
+
+interaction_model2_infreq_RT <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  rt_prepotent * group + (pre_smoothed_deviance_scaled + rt_prepotent||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_RT)
+
+```
+
+```{r covariate d prime on infrequent trials}
+encoding <- left_join(encoding, dprime.hc_trialtype[classifyEnc == 'living', .(participant, dprime_infreq = dprime)])
+
+interaction_model2_infreq_mem <- encoding[classifyEnc == 'living', summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled * group +  pre_smoothed_deviance_scaled * dprime_infreq + (pre_smoothed_deviance_scaled||participant), family = 'binomial'))][term != '(Intercept)']; print(interaction_model2_infreq_mem)
+```
+
+```{r number of lapses figure}
+library(scales)
+ggplot(numOutChunks, aes(group, Nolapses)) +
+  geom_bar(stat = "identity")
+
+ggplot(numOutChunks, aes(group, Nolapses)) +
+  ggtheme +
+  geom_bar(position="dodge", stat="summary", fun.y = "mean", alpha = 0.7, color = 'black',aes(group, Nolapses, fill = as.factor(group))) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0, size = 1) + 
+  scale_fill_manual(values = c("blue", "violetred")) + 
+  theme(legend.position = 0) + 
+  labs(y = "Number of lapses", x = ' ')
+
+ggsave("no_lapses.png", height = 5, width = 3)
+
+
+#trials spent out of the zone
+
+ggplot(percents, aes(group,  percentOut)) +
+  ggtheme +
+  geom_bar(position="dodge", stat="summary", fun.y = "mean", alpha = 0.7, color = 'black',aes(group, percentOut, fill = as.factor(group))) + stat_summary(fun.data = mean_se, geom = "errorbar", width = 0, size = 1) + 
+  scale_fill_manual(values = c("blue", "violetred")) + 
+  theme(legend.position = 0) + 
+  labs(y = "Time out of the zone", x = ' ')
+
+ggsave("Time_out_zone.png", height = 5, width = 3)
+
+
+
+#Length of a lapse
+ggplot(median_length_lapse, aes(group,  median_lapse_length)) +
+  ggtheme +
+  geom_bar(position="dodge", stat="summary", fun.y = "mean", alpha = 0.7, color = 'black',aes(group, median_lapse_length, fill = as.factor(group))) + stat_summary(fun.data = mean_se, geom = "errorbar", width = 0, size = 1) + 
+  scale_fill_manual(values = c("blue", "violetred")) + 
+  theme(legend.position = 0) + 
+  labs(y = "Lapse Length", x = ' ')
+
+ggsave("Lapse_length.png", height = 5, width = 3)
+```
+
+```{r dprime and attention correlations}
+ggplot(percents_dprime.hc, aes(percentOut, dprime)) + 
+  geom_point()  + 
+  stat_smooth(formula = y~ poly(x,2), method = 'lm')
+
+#Adults
+ggplot(percents_dprime.hc[group == "Adults" & !participant %in% c(outlier$participant)], aes(percentOut, dprime)) + 
+  geom_point(color = "darkblue")  + 
+  ggtheme
+ggsave("dprime_percentOut_adults.png", height=4, width = 4)
+
+ggplot(percents_dprime.hc[group == "Adults" & !participant %in% c(outlier$participant)], aes(percentOut, dprime, col = as.factor(kmeansGroup))) + 
+  geom_point()  + 
+  ggtheme + 
+  theme(legend.position = 0) +
+  scale_color_manual(values = c("dodgerblue", "darkblue")) +
+  stat_smooth(method = 'lm', formula = y ~ x)
+
+ggsave("dprime_percentOut_adults_kmeans.png", height=4, width = 4)
+
+
+
+ggplot(percents_dprime.hc[group == "Children" & !participant %in% c(outlier$participant)], aes(percentOut, dprime)) + 
+  geom_point(color = "violetred")  + 
+  stat_smooth(formula = y~ x, method = 'lm', color = 'black') + 
+  ggtheme
+
+ggplot(percents_dprime.hc[group == "Adults" & !participant %in% c(outlier$participant)], aes(percentOut, dprime)) + 
+  geom_point(color = "darkblue")  + 
+  stat_smooth(formula = y~ poly(x,2), method = 'lm', color = 'black') + 
+  ggtheme
+
+ggsave("dprime_timeOut_Adults.png", height = 4, width = 4)
+
+
+median_length_lapse <- left_join(Dprime.all, median_length_lapse)
+numOutChunks <- left_join(Dprime.all, numOutChunks)
+
+ggplot(median_length_lapse[group == "Children" & !participant %in% c(outlier$participant) & median_lapse_length < 15], aes(median_lapse_length, dprime)) + 
+  geom_point(color = "violetred")  + 
+  stat_smooth(formula = y~ x, method = 'lm', color = 'black') + 
+  ggtheme
+
+ggplot(numOutChunks, aes(Nolapses, dprime, col =group)) + 
+  geom_point()  + 
+  stat_smooth(formula = y~ poly(x,2), method = 'lm') + 
+  facet_wrap(~group) + 
+  ggtheme
+
+summaryh(lm(Nolapses ~ dprime, data = numOutChunks[group == "Children"]))
+summaryh(lm(Nolapses ~ dprime, data = numOutChunks[group == "Adults"]))
+```
+
+
+# Exploratory 
+```{r calculate memory lapse length and frequency }
+encoding <- left_join(encoding, recognition[, .(participant, stimulus, acc_mem = acc)])
+encoding[, memoryHits2 := memory_hitsHC]
+encoding[ratingConfidence %in% c(1,2), memoryHits2 := 0]
+encoding[, .(acc_mem, memoryHits2, ratingConfidence)]%>%View()
+
+#computer number of chunks per person and how long are chunks...
+
+encoding[!is.na(acc_mem) & acc_mem == 1,  memoryzone2 := 100]
+encoding[!is.na(acc_mem) &  acc_mem == 0,  memoryzone2 := -100]
+encoding[!is.na(acc_mem), chunkIndicate_memory := c(1000, diff(memoryzone2))]%>%print(n=200)
+encoding[!is.na(acc_mem) & trialNo == 1, chunkIndicate_memory := 200]
+encoding[!is.na(acc_mem) & trialNo %in% c(1:10), .(participant, trialNo, acc_mem, memoryHits2, memoryzone2,chunkIndicate_memory)]%>%View()
+
+encoding[!is.na(acc_mem) & chunkIndicate_memory == 0, chunkIndicate_memory := NA]
+encoding[!is.na(acc_mem) & !is.na(chunkIndicate_memory), chunkNoMemory := 1:.N, by = participant]
+
+encoding[!is.na(acc_mem) & !is.na(chunkIndicate_memory) & memoryzone2 == 100, chunkNoMemory_in := 1:.N, by = participant]
+encoding[!is.na(acc_mem) & !is.na(chunkIndicate_memory) & memoryzone2 == -100, chunkNoMemory_out := 1:.N, by = participant]
+
+encoding[!is.na(acc_mem), chunkNoMemory := na_locf(chunkNoMemory)]
+encoding[!is.na(acc_mem) & is.na(memoryzone2), chunkNoMemory := NA]
+
+#compute number within each chunk
+# kids really do have more memory lapses
+# memory formation across time is more variable in children
+# they go in and out of forming memories more frequently...
+encoding[!is.na(acc_mem), numInChunk_mem := 1:.N, by = .(chunkNoMemory, participant)]
+encoding[!is.na(acc_mem), .(participant, memory_hitsHC, acc_mem, memoryHits2, chunkNoMemory, chunkNoMemory_in, chunkNoMemory_out, numInChunk_mem,ratingConfidence)]%>%View()
+encoding[participant == 16, .(participant, stimulus, trialNo, memory_hitsHC, acc_mem, memoryHits2, chunkNoMemory, chunkNoMemory_in, chunkNoMemory_out, numInChunk_mem,ratingConfidence)]%>%View()
+
+
+#Frequency of switches between forming memories and not forming memories
+TotalMemorySwitches <- encoding[!participant %in% c(outlier$participant), .(Total_switches_memory = max(chunkNoMemory)), by = .(participant, group)]
+TotalMemorySwitches[, summaryh(lm(Total_switches_memory ~ group))]
+ggplot(TotalMemorySwitches, aes(group, Total_switches_memory)) + 
+  geom_violin() + 
+  geom_jitter() + 
+  stat_summary(color = "red")
+
+
+
+# length of any given memory window period
+Length_memory_window <- encoding[, .(length_memory_chunk = max(numInChunk_mem)), by = .(participant, group, chunkNo)]
+Length_memory_window[, summaryh(lmer(length_memory_chunk ~ group + (chunkLength |participant), control = ))]
+Length_memory_window[, .(length_window = median(length_memory_chunk)), by = .(participant, group)][length_window < 10, summaryh(lm(length_window ~ group))]
+Length_memory_window.p <- Length_memory_window[, .(length_window = median(length_memory_chunk)), by = .(participant, group)]
+
+ggplot(Length_memory_window.p, aes(group, length_window)) + 
+  geom_violin() + 
+  geom_jitter() + 
+  stat_summary(color = "red")
+
+Length_memory_lapse_window <- encoding[memory_hits2 == 0, .(length_memory_chunk = max(numInChunk_mem)), by = .(participant, group, chunkNo)]
+Length_memory_lapse_window[, summaryh(lmer(length_memory_chunk ~ group + (chunkNo|participant)))]
+
+ggplot(Length_memory_window.p, aes(group, length_window)) + 
+  geom_violin() + 
+  geom_jitter() + 
+  stat_summary(color = "red")
+
+encoding[!participant %in% c(outlier$participant), .(chunkNumber = max(chunkNoMemory, na.rm =T)), by = .(participant, group)][, summaryh(lm(chunkNumber ~ group))]
+encoding[!participant %in% c(outlier$participant), .(chunkNumber = max(chunkNoMemory, na.rm =T)), by = .(participant, group)][, mean(chunkNumber), by  = group]
+encoding[!participant %in% c(outlier$participant), .(Length = max(numInChunk_mem, na.rm =T)), by = .(participant, group)][, median(Length), by  = group]
+encoding[!participant %in% c(outlier$participant), .(Length = max(numInChunk_mem, na.rm =T)), by = .(participant, group)]
+
+
+#  length of good encoding windows
+Good_encoding_window <- encoding[memoryHits2 == 1, .(length  = max(numInChunk_mem)), by= .(participant, group, chunkNoMemory)]
+Good_encoding_window[, chunkNoMemoryScaled := chunkNoMemory/100]
+Good_encoding_window[, lengthScaled := length/100]
+Good_encoding_window[length < 6, summaryh(lmer(lengthScaled ~ group  + (chunkNoMemoryScaled||participant)))]
+
+Good_encoding_window.p <- Good_encoding_window[, .(length = mean(length)), by = .(participant, group)]
+ggplot(Good_encoding_window.p[length < 6], aes(group, length)) + 
+  geom_jitter() + 
+  stat_summary(color = "red")
+
+
+# length of bad encoding window
+bad_encoding_window <- encoding[memoryHits2 == 0, .(length  = max(numInChunk_mem)), by= .(participant, group, chunkNoMemory)]
+bad_encoding_window[, chunkNoMemoryScaled := chunkNoMemory/100]
+bad_encoding_window[, lengthScaled := length/100]
+bad_encoding_window[length < 4, summaryh(lmer(lengthScaled ~ group  + (chunkNoMemoryScaled||participant)))]
+
+bad_encoding_window.p <- bad_encoding_window[, .(length = mean(length)), by = .(participant, group)]
+ggplot(bad_encoding_window.p[length < 4], aes(group, length)) + 
+  geom_violin() + 
+  geom_jitter() + 
+  stat_summary(color = "red")
+
+
+
+encoding <- left_join(encoding, Good_encoding_window[, .(participant, chunkNoMemory_in, length_memory_in = length)])
+encoding[, .(participant, memoryHits2, chunkNo_in, length_memory_in)]%>%View()
+encoding[, .(length  = max(numInChunk)), by= .(participant, group, chunkNoMemory_in)][, summaryh(lmer(length ~ group + (chunkNoMemory_in||participant)))]
+```
+
+Performance decrements
+```{r}
+# rt deviance by block
+encoding[, trialNoC := scale(trialNo, scale = F), by = participant]
+model_vigilance1 <- lmer(rtMeanAbsoluteDeviation ~ trialNoC * groupEC + (1|participant), 
+                         control = lmerControl(optimizer="Nelder_Mead"), 
+                         data=encoding)
+summary(model_vigilance1)
+
+encoding[trialNo < 167, blockNumber := 1]
+encoding[, summaryh(lmer(rtMeanAbsoluteDeviation ~ groupEC + (1|participant))), by = blockNumber]
+#save.image("Feb142022SustainedAttention.R")
+load("Feb142022SustainedAttention.R")
+model_vigilanceMemory <- glmer(memory_hits ~ trialNoC * groupEC + (1|participant), 
+                               family = "binomial", data=encoding)
+summary(model_vigilanceMemory)
+
+# accuracy
+vigilance_accuracy.m <- glmer(acc ~ trialNo * groupEC + (trialNo||participant), family = "binomial",
+                              data = encoding[trialNo > 3]);summary(vigilance_accuracy.m)
+
+encoding[is.na(rt) & acc == 0, errorType := "omission"]
+encoding[!is.na(rt) & acc == 0, errorType := "comission"]
+encoding[acc == 1, errorType := "correct"]
+
+vigilance_accuracy.m_omission <- glmer(acc ~ trialNo * groupEC + (trialNo||participant), family = "binomial",data = encoding[trialNo > 5 & !errorType %in% c("omission")])
+summary(vigilance_accuracy.m_omission)
+
+vigilance_accuracy.m_omission2 <- glmer(acc ~ blockNumber + (1|participant), family = "binomial",data = encoding[trialNo > 5 & !errorType %in% c("omission")])
+summary(vigilance_accuracy.m_omission2)
+
+encoding[errorType != "correct", .N, by = .(participant, errorType, blockNumber, group)][, summaryh(t.test(N ~ blockNumber)), by= group]
+
+encoding[errorType != "correct" & trialNo > 5, .N, by = .(participant, errorType, blockNumber, group)][, mean(N),by = .(group, blockNumber, errorType)]
+
+
+
+
+vigilance_accuracy.m_comission <- glmer(acc ~ trialNo * groupEC + (trialNo||participant), family = "binomial", data = encoding[trialNo > 5 & !omission %in% c(0)])
+summary(vigilance_accuracy.m_comission)
+
+
+
+  encoding[trialNo > 5 & group == "Children"& !participant %in% outlier$participant & classifyEnc == 'living', summary(glmer(acc ~ trialNo + (trialNo|participant), family = "binomial"))]
+  
+encoding[trialNo > 5 & !participant %in% outlier$participant & classifyEnc == 'living', summary(glmer(acc ~ trialNo * group + (trialNo|participant), family = "binomial"))]
+
+
+# memory differences by block
+encoding[trialNo > 150 & !participant %in% outlier$participant, summary(glmer(memory_hits ~ group + (1|participant), family = "binomial"))]
+encoding[!participant %in% outlier$participant, summary(glmer(memory_hits ~ trialNo * group + (1|participant), family = "binomial"))]
+```
+
+
+```{r}
+percents_dprime.hc[, summaryh(lm(median_lapse_length ~ percentOutRO + group))]
+hist(length_attentional_lapses[group == "Children"]$N)
+hist(length_attentional_lapses[group == "Adults"]$N)
+```
+
+
+```{r}
+encoding_test <- left_join(encoding, recognition[, .(participant, stimulus, trialNo_rec = trialNo)])
+encoding_test[!participant %in% c(outlier$participant), summaryh(glmer(memory_hits ~ trialNo_rec * group + trialNo + (trialNo + trialNo_rec|participant), family = "binomial"))]
+encoding_test[!participant %in% c(outlier$participant), summaryh(glmer(memory_hits ~ trialNo_rec * group + trialNo + (trialNo + trialNo_rec|participant), family = "binomial"))]
+encoding_test[!participant %in% c(outlier$participant), summaryh(glmer(memory_hits ~ trialNo_rec * classifyEnc + trialNo + (trialNo + trialNo_rec|participant), family = "binomial"))]
+encoding_test[!participant %in% c(outlier$participant), summaryh(glmer(memory_hits ~ trialNo_rec + trialNo + (trialNo + trialNo_rec|participant), family = "binomial")), by = .(classifyEnc, group)]
+```
+
+Omission errors
+```{r}
+encoding[is.na(rtResidual), .N, by = .(participant, group)][, summaryh(lm(N ~ group))]
+```
+
+Do children have greater tau?
+```{r}
+encoding[, summaryh(lmer(acc ~ group + (1|participant))), by = classifyEnc]
+encoding[, summaryh(lmer(rt ~ group + (1|participant))), by = classifyEnc]
+encoding[, .(tau = timefit(rt)@par[3]), by = .(participant, group)][, summaryh(lm(tau ~ group))]
+```
+
+anticipations
+```{r}
+encoding[rt < .2, .N, by = .(participant, group, blockNumber)][, mean(N), by  = .(group, blockNumber)]
+encoding[rt < .1, .N, by = .(participant, group, blockNumber)][, summaryh(lm(N ~ group)), by = .(blockNumber)]
+
+encoding[rt > 1.2, .N, by = .(participant, group, blockNumber)][, mean(N), by  = .(group, blockNumber)]
+encoding[rt > 1.2, .N, by = .(participant, group)][, summaryh(lm(N ~ group))]
+
+
+
+encoding[is.na(rt), .N, by = .(participant, group, blockNumber)][, .N, by =.(group, blockNumber)]
+encoding[is.na(rt), .N, by = .(participant, group, blockNumber)][, summaryh(lm(N ~ group * blockNumber))]
+encoding[is.na(rt), .N, by = .(participant, group, classifyEnc)][, summaryh(lm(N ~ group)), by = classifyEnc]
+```
+
+```{r}
+encoding[post_infrequent_trial2 == "posterror", summaryh(glmer(acc ~ group + (1|participant), family = "binomial"))]
+```
+
+
+
+
+number of inifrequent trials out of the zoone in kids and adults
+```{r}
+
+num_trial_type <- encoding[, .(num_trialType = .N), by = .(participant, zoneEC, trialTypeEC, groupEC, trialType)]
+num_trials <- encoding[, .(tot_num_trials = .N), by = .(participant, zoneEC)]
+num_trial_type <- left_join(num_trial_type, num_trials)
+
+num_trial_type[, percent := num_trialType/tot_num_trials]
+
+
+num_trial_type[, summaryh(lm(percent ~ trialTypeEC * zoneEC))]
+
+ggplot(num_trial_type, aes(as.factor(zoneEC), percent, col = groupEC)) + 
+  stat_summary() + 
+  facet_wrap(~trialType, scales = "free") + 
+scale_x_discrete(breaks = c(-0.5, 0.5), labels = c("In", "Out")) +
+  ggtheme
+
+num_trial_type[, mean(percent, na.rm=T), by = .(trialType, zoneEC, groupEC)]
+
+
+num_trial_type[, 
+               summaryh(lm(percent ~ zoneEC)), 
+               by = .(groupEC, trialTypeEC)][term != "(Intercept)"]
+```
+
+
+
+# do memory results hold if we z score data?
+
+```{r}
+encoding[, smoothed_gaussianZ := scale(smoothed_gaussian), by = .(participant)]
+cutOffZ <- encoding[, median(smoothed_gaussianZ, na.rm=TRUE), by = .(participant)][, mean(V1)]
+encoding[smoothed_gaussianZ > cutOff, zoneZ := 1]
+encoding[smoothed_gaussianZ < cutOff, zoneZ := 0]
+
+percentsZ <- encoding[!participant %in% c(outlier$participant), .(percentOutZ = mean(zoneZ, na.rm=T)), by = .(participant,group, groupEC)]
+
+# do kids have higher lapse rates?
+percentsZ[, summaryh(lm(percentOutZ ~ group))]
+percents_dprime.hc2 <- left_join(Dprime.hc, percentsZ[, .(participant, percentOutZ2 = percentOutZ)])
+percents_dprime.hc2[, summaryh(lm(dprime ~ percentOut)), by = group]
+percents_dprime.hc2[, summaryh(lm(dprime ~ percentOutZ2)), by = group]
+```
+
+
+Does average error rate drive cognitive control shifts?
+```{r}
+# calculate moving average of task performance
+encoding[, moving_correct_rate := as.vector(lag(roll::roll_mean(as.matrix(acc), width  = 10, min_obs = 1))), by = .(participant)]
+
+library(pracma)
+encoding[, moving_correct_ratew := lag(x = movavg(x = acc, n = 10, type = "w"), n = 1), by = participant]
+
+encoding[, post_error := lag(error), by = participant]
+encoding[, post_error2 := lag(post_error), by = participant]
+encoding[, post_error3 := lag(post_error2), by = participant]
+
+print(encoding[, .(participant, trialNo, acc, moving_correct_rate)], 50)
+encoding$zone
+model <- glmer(zone ~ moving_correct_ratew + (moving_correct_ratew|participant), family = "binomial", data = encoding[is.na(post_error) & is.na(post_error2) & is.na(post_error3)])
+summaryh(model)
+
+encoding[, mean(rtMeanAbsoluteDeviation, na.rm=T), by = zone]
+encoding[, .(zone, zone2)]%>%distinct()
+
+encoding[post_error == 0, mean(zone, na.rm=T), by = participant][, mean(V1)]
+encoding[is.na(post_error), mean(zone, na.rm=T), by = participant][, mean(V1)]
+
+```
+
+
+
+
+
