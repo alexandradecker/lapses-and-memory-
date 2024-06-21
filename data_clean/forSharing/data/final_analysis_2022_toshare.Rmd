@@ -10,8 +10,8 @@ chunk_output_type: console
 ---
 
 ```{r load/save image file}
-rm(list = ls())    
-library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary); source("../utils.r"); source("../info.r")
+rm(list = ls())
+library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary); source("utils.r"); source("info.r")
 encoding <- fread('encoding.csv')
 ```
 
@@ -47,17 +47,7 @@ ggplot(percents, aes(group, percentOut *100, fill = as.factor(group))) +
   coord_cartesian(ylim = c(-15, 110)) + 
   scale_y_continuous(breaks = c(0, 20, 40, 60, 80, 100)) +
   theme(legend.position = 0) 
-#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
 
-
-# figure 2E
-ggplot(percents, aes(percentOut *100, percentOut_noerrRO * 100)) +
-  #geom_violin(trim = F, width = 1) +
-  geom_quasirandom(width  = .2, size =1 ) +
-  ggtheme +
-  labs(y = "Percent out \n(removed post-error trials)", x = "Percent out (original)") + 
-  stat_smooth(method = "lm")
-ggsave( file = "percentOut_error.png", width = 4, height = 4)
 ```
 
 Relationship between lapse rates and classification accuracy (initial validation reported in methods)
@@ -73,11 +63,9 @@ Age group difference in lapse frequency
 ```{r age differences in lapse frequency}
 # aggregate data
 numOutChunks <- encoding[!participant %in% c(outlier$participant),.(Nolapses = max(chunkNo_out, na.rm=TRUE)), by = .(participant, group, groupEC)]
-numOutChunksnoerr <- encoding[!participant %in% c(outlier$participant),.(Nolapsesnoerr = max(chunkNo_outnoerr, na.rm=TRUE)), by = .(participant, group, groupEC)]
 
 # model
 summaryh(t.test(Nolapses ~ groupEC, data = numOutChunks))
-summaryh(t.test(Nolapsesnoerr ~ groupEC, data = numOutChunksnoerr))
 
 # figure S1
 ggplot(numOutChunks[!participant %in% c(outlier$participant)], aes(group, Nolapses, fill = as.factor(group))) +
@@ -87,7 +75,6 @@ ggplot(numOutChunks[!participant %in% c(outlier$participant)], aes(group, Nolaps
   labs(x = "Mean accuracy", y = "No. of attentional lapses") +
   scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0)
-#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
 ```
 
 Age group differences in lapse length
@@ -101,16 +88,6 @@ median_length_lapse = length_attentional_lapses[, .(median_lapse_length = median
 median_length_lapse[!participant %in% c(outlier$participant), summaryh(t.test(median_lapse_length ~ groupEC))]
 
 
-# aggregate data
-length_attentional_lapsesnoerr = encoding[zone_noerr == 1 & !participant %in% c(outlier$participant), .N, by = .(participant, group, groupEC, chunkNonoerr)]
-length_attentional_lapsesnoerr2 = encoding[zone_noerr == 1 & !participant %in% c(outlier$participant), list(lengthChunknoerr = max(numInChunknoerr)), by = .(participant, group, groupEC, chunkNonoerr)]
-
-#aggregate data
-median_length_lapsenoerr = length_attentional_lapsesnoerr[, .(median_lapse_lengthnoerr = median(N)), by = .(participant, group, groupEC)]
-#model - pre-registered; note results don't differ depending on model I run
-median_length_lapsenoerr[!participant %in% c(outlier$participant), summaryh(t.test(median_lapse_lengthnoerr ~ groupEC))]
-
-
 # figure S2
 ggplot(median_length_lapse, aes(group, median_lapse_length, fill = as.factor(group))) +
   geom_violin(trim = F, width = 1) +
@@ -119,118 +96,6 @@ ggplot(median_length_lapse, aes(group, median_lapse_length, fill = as.factor(gro
   labs(x = "", y = "Median lapse length") +
   scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0)
-#ggsave( file = "percentOut_violin.eps", width = 5.5, height = 3)
-```
-
-Analysis S1: permute data
-Are age differences in lapse length and frequency greater than would be expected by chance
-null hypothesis distribution for lapse frequency and length,
-```{r  eval = FALSE, echo = FALSE, include =FALSE}
-dt_permute <- data.table(run= 1:5000)
-i <-  1
-
-for (i in  1:500) {
-  #copy new classification data
-  encodingCopy <- encoding[!participant %in% c(outlier$participant), .(participant, trialNo, stimulus, classifyEnc, rt, groupEC)]
-  
-  #shuffle trials and arrange by participant
-  encodingCopy2 <- encodingCopy[sample(nrow(encodingCopy))]%>%arrange(participant) 
-  
-  #code new trial number
-  encodingCopy2 <- as.data.table(encodingCopy2)
-  encodingCopy2[, trialNo_new := 1:.N, by = participant] 
-  
-  # correct for linear drift in RT - to be consistent with primary analyses
-  encodingCopy2[!is.na(rt), rtResidual := residuals(lm(rt ~ trialNo_new)), by= participant]
-  
-  # remove and interpolate infrequent trials
-  encodingCopy2[classifyEnc == "living", rtResidual := NA]
-  encodingCopy2[, rtResidual_zone_surround := na_ma(rtResidual, k=2, weighting = "simple"), by = participant]
-  
-  # compute RT absolute deviance in new data
-  encodingCopy2[!is.na(rtResidual_zone_surround), rtMeanAbsoluteDeviation_surround := abs(rtResidual_zone_surround - mean(rtResidual_zone_surround)), by = participant] 
-  
-  # smooth data using gaussian kernel
-  encodingCopy2[, smoothed_gaussian := movAvg2(y = rtMeanAbsoluteDeviation_surround, bw = 2, type = "gaussian", center.weight  = 1, furthest.weight = 0.5), by = participant]
-
-  # compute cut off used to assign zone labels
-  cutOffs <- encodingCopy2[, median(smoothed_gaussian, na.rm=TRUE), by = .(participant)]
-  cutOff <- cutOffs[, mean(V1)]
-  
-  # assign zone labels
-  encodingCopy2[smoothed_gaussian > cutOff, zone := 1]
-  encodingCopy2[smoothed_gaussian < cutOff, zone := 0]
-  
-  # compute length and frequency of lapses
-  encodingCopy2[zone == 1,  zone2 := -100]
-  encodingCopy2[zone == 0,  zone2 := 100]
-  encodingCopy2[, chunkIndicate := c(1000, diff(zone2))]
-  encodingCopy2[trialNo_new == 1, chunkIndicate := 200]
-  encodingCopy2[chunkIndicate == 0, chunkIndicate := NA]
-  
-  #create chunk numbers, for in and out of the zone
-  encodingCopy2[!is.na(chunkIndicate), chunkNo := 1:.N, by = participant]
-  encodingCopy2[!is.na(chunkIndicate) & zone == 1, chunkNo_out := 1:.N, by = participant]
-  encodingCopy2[!is.na(chunkIndicate) & zone == 0, chunkNo_in := 1:.N, by = participant]
-  encodingCopy2[, chunkNo := as.integer(na.locf(chunkNo)), by = participant] 
-  encodingCopy2[, numInChunk := 1:.N, by = .(chunkNo, participant)]
-  
-  # compute maximum chunk number for out of the zone (or the total number of lapses per person/ lapse frequency)
-  ChunkNumOut <- encodingCopy2[, list(numOutChunks = max(chunkNo_out, na.rm=TRUE)), by = .(participant, groupEC)]
-  
-  # for this iteration, compute the t statistic for lapse frequency and add to dt_permute
-  testNum_chunks <- t.test(numOutChunks ~ groupEC, data = ChunkNumOut)
-  dt_permute[run == i, kid_lapse_Num := testNum_chunks$estimate[1]]
-  dt_permute[run == i, adult_lapse_Num := testNum_chunks$estimate[2]]
-  dt_permute[run == i, t_stat_Num := testNum_chunks$statistic]
-  
-  # for this iteration, compute the t statistic for median lapse length and add to dt_permute
-  lengthChunks_new <- encodingCopy2[zone == 1, list(lengthChunk = max(numInChunk)), by = .(groupEC, participant, chunkNo)]%>%arrange(participant, chunkNo)
-  medianChunkLength_new <- lengthChunks_new[, list(median = median(lengthChunk)), by = .(participant, groupEC)]
-  
-  test_chunkLength <- t.test(median ~ groupEC, data = medianChunkLength_new)
-  dt_permute[run == i, kid_length_out:= test_chunkLength$estimate[1]]
-  dt_permute[run == i, adult_length_out:= test_chunkLength$estimate[2]]
-  dt_permute[run == i, t_stat_length:= test_chunkLength$statistic]
-  print(i)
-}
-```
-
-permutation analysis - Lapse frequency
-compute probability of obtaining this result in null hypothesis distribution 
-```{r eval = FALSE, echo = FALSE, include =FALSE }
-# probability - frequency of lapses
-sum(dt_permute$t_stat_Num  > 4.10)/5000 
-
-# Figure S2 - frequency of lapses
-quantile(dt_permute$t_stat_Num, probs = c(0.025, .975)) # determine where 95% confidence intervals are within distribution
-ggplot(dt_permute, aes(x = (t_stat_Num))) +
-  geom_histogram(position = "dodge", fill  = "mediumorchid", color = "black", bins = 20, size =1)+
-  ggtheme +
-  labs(x = "t-values", y = "Proportion of occurences") +
-  geom_vline(xintercept = c(2.29, 3.84), linetype = "dashed")+
-scale_y_continuous(breaks = c(0, 200, 400, 600, 800), label = c("0","0.04", "0.08","0.12", "0.16")) +
-  #scale_x_continuous(limits = c(-1.25, -4.11), breaks = c(1.5, 2, 2.5, 3, 3.5, 4)) +
-  geom_segment(aes(x = 4.10, y = 0, xend = 4.10, yend = 800), color  = "orange")
-ggsave(file = "tStat_FrequencyLapses.eps" , width = 5.5, height = 3)
-```
-
-permutation analysis - Lapse length
-null hypothesis distribution t stat for lapse length group differences 
-```{r eval = FALSE, echo = FALSE, include =FALSE}
-# probability in null hypothesis distribution
-sum(dt_permute$t_stat_length  > 7.05)/5000
-
-#Figure S2 - lapse length 
-quantile(dt_permute$t_stat_length, probs = c(0.025, .975))
-ggplot(dt_permute, aes(x = (t_stat_length))) +
-  geom_histogram(position = "dodge", fill  = "mediumorchid", color = "black", bins = 20, size =1)+
-  ggtheme +
-  geom_vline(xintercept = c(3.88, 7.74), linetype = "dashed")+
-  labs(x = "t-value", y = "Proportion of occurences") +
-  scale_y_continuous(breaks = c(0, 200, 400, 600, 800), label = c("0","0.04", "0.08", "0.12", "0.16"))+
-  geom_segment(aes(x = 7.05, y = 0, xend = 7.05, yend = 800), color  = "orange")
-ggsave(file = "tStat_LengthLapses.eps" , width = 5.5, height = 3 )
 ```
 
 Figure 2A,C- Representative child's raw RT and RT deviance
@@ -245,7 +110,6 @@ ggplot(encoding[participant == 224], aes(trialNo, rtResidual + meanrt)) +
   labs(x = 'Trial number', y = 'Response time (seconds)') + 
   ggtheme +
   coord_cartesian(ylim = c(0, 1.5))
-#ggsave( file = "child_rtResidual.eps", width = 5.5, height = 3)
 
 # Figure 2C - RT deviance with zone assignment
 toPlot <- encoding[participant == 224 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
@@ -268,7 +132,6 @@ ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) +
   scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
   coord_cartesian(ylim = c(0, 0.6)) + 
   theme(legend.position = 0)
-#ggsave( file = "child_smoothed_gaussian.eps", width = 5.5, height = 3)
 ```
 
 Figure 2B, D - Representative adult's raw RT and RT deviance
@@ -280,7 +143,6 @@ ggplot(encoding[participant == 157], aes(trialNo, rtResidual + meanrt)) +
   labs(x = 'Trial Number', y = 'Response time (seconds)') + 
   ggtheme +
   coord_cartesian(ylim = c(0, 1.5))
-#ggsave( file = "adult_rtResidual.eps", width = 5.5, height = 3)
 
 # Figure 2D
 toPlot <- encoding[participant == 157 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
@@ -304,7 +166,6 @@ ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) +
   scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
   coord_cartesian(ylim = c(0, 0.6)) + 
   theme(legend.position = 0)
-#ggsave( file = "adult_smoothed_gaussian.eps", width = 5.5, height = 3)
 ```
 
 #########################################################
@@ -331,31 +192,13 @@ ggplot(aggregate_accuracy_group, aes(trialType, acc, col = group)) +
 Between subjects: Accuracy and Attention relationships 
 ```{r relationship between attentional lapse rates and classification accuracy}
 # model: accuracy and attention correlation
-percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut, coef_var, coef_varRO)])
+percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut)])
 percents_trialtype[, percentOutC := scale(percentOut, scale = F)]
-percents_trialtype[, coef_varROC := scale(coef_varRO, scale = F)]
 
 percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeEC * groupEC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant)]); summaryh(percentOut_accuracy.m)
 
-# model: accuracy and coefficient of variation correlation
-cov_accuracy.m <- lmer(acc ~ coef_varROC * trialTypeEC * groupEC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant)]); summaryh(cov_accuracy.m)
-
-# the relationship between accuracy and percent out holds when controlling for post error slowing 
-#percents[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC + postinf)), by = .(group)][term != "(Intercept)"]
-#percents[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC * groupEC + postinf))][term != "(Intercept)"]
-
 percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC)), by = .(group, trialTypeEC)][term != "(Intercept)"]
 percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC)), by = .(group, trialTypeEC)][term != "(Intercept)"]
-percents_trialtype <- left_join(percents_trialtype, percents_noerr)
-percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOut_noerr)), by = .(group, trialTypeEC)][term != "(Intercept)"]
-
-percents_trialtype[, percentOut_noerrC := scale(percentOut_noerr, scale = F)]
-percents[, percentOut_noerrC := scale(percentOut_noerr, scale = F)]
-
-percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOut_noerrC * groupEC * trialTypeEC))][term != "(Intercept)"]
-percents[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOut_noerrC * groupEC ))][term != "(Intercept)"]
-percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOut_noerrC)), by = .(group, trialTypeEC)][term != "(Intercept)"]
-
 
 
 # Visualize - accuracy and attention correlation
@@ -369,7 +212,6 @@ ggplot(percents[!participant %in% c(outlier$participant)], aes(percentOut, acc, 
 scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
     coord_cartesian(ylim = c(.9, 1.01))+
   theme(legend.position = 0)
-ggsave( file = "accuracy_percent_out_group.png", height = 3, width = 4)
 
 # Figure S4A
 ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'nonliving'], aes(percentOutC, acc, col = group))+
@@ -379,10 +221,8 @@ ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType =
   labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
   scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
   scale_y_continuous(breaks = c(.94, .96, .98, 1), labels = c(94, 96, 98, 100)) +
-  coord_cartesian(ylim = c(.935, 1.015), xlim = c(0.05, .85))+
 scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
   theme(legend.position = 0)
-#ggsave( file = "accuracy_percent_out_group_frequent.png", width = 5, height = 3)
 
 # Figure S4B
 ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'living'], aes(percentOut, acc, col = group))+
@@ -395,7 +235,6 @@ ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType =
   coord_cartesian(ylim = c(.42, 1.018), xlim = c(0.05, .85))+
 scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
   theme(legend.position = 0)
-#ggsave( file = "accuracy_percent_out_group_infrequent.png", width = 5, height = 3)
 ```
 
 Re-do above analyses comparing children to matched adults
@@ -410,11 +249,8 @@ dataToCluster[, .N, by = kmeansGroup]
 dataToCluster[, mean(percentOutZ), by = kmeansGroup]
 colors <- c(colors, "mediumorchid4", 'yellow4')
 dataToCluster <- rbind(dataToCluster, percents[group == "Children" & !participant %in% c(outlier$participant), .(participant, percentOut)], fill = T)
-percents[, coef_varROC := scale(coef_varRO)]
-percents[!is.na(coef_varROC), kMeansGroupCOV := kmeans(percents[!is.na(coef_varROC)]$coef_varROC, centers = 2, iter.max = 1000, algorithm = "MacQueen")[1]]
 
 # join data
-percents$kmeansGroup <- NULL
 percents <- left_join(percents, dataToCluster)
 percents[, .N, by = .(kmeansGroup)]
 percents[, percentOutC := scale(percentOut, scale = F)]
@@ -468,7 +304,6 @@ ggplot(percents[!participant %in% c(outlier$participant) & group %in% ("Adults")
   theme(legend.position = 0) +
   coord_cartesian(ylim = c(95, 100)) + 
   scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))
-ggsave( file = "accuracy_percent_out_group.png", height = 3, width =5)
 ```
 
 #### Accuracy and time out mediation ####
@@ -479,15 +314,14 @@ ggsave( file = "accuracy_percent_out_group.png", height = 3, width =5)
 percents[!participant %in% c(outlier$participant), percentOutZ := scale(percentOut)]
 percents[!participant %in% c(outlier$participant), mean_acc.allZ := scale(acc)]
 
-model.y_all = lm(mean_acc.allZ ~ groupEC + percentOutZ + mean_rt, data = percents[!participant %in% c(outlier$participant)])
+model.y_all = lm(mean_acc.allZ ~ groupEC + percentOutZ , data = percents[!participant %in% c(outlier$participant)])
 summary(model.y_all)
 
-model.m_all = lm(percentOutZ ~ groupEC+ mean_rt, data = percents[!participant %in% c(outlier$participant)])
+model.m_all = lm(percentOutZ ~ groupEC, data = percents[!participant %in% c(outlier$participant)])
 summary(model.m_all)
 
 model.mediate_attention_accuracy_all = mediate(model.m_all, model.y_all, sims = 5000, treat = 'groupEC', mediator = 'percentOutZ', covariates = 'mean_rt', boot = TRUE)
 summary(model.mediate_attention_accuracy_all)
-
 ```
 
 
@@ -496,7 +330,6 @@ Within subject analysis predicting accuracy from RT deviance
 #################################################################
 
 model for accuracy ~ trial type * group * age
-
 
 ```{r eval = FALSE, include = FALSE, echo = FALSE}
 # model: Age differences
@@ -513,7 +346,6 @@ ggplot(toPlot.w, aes(as.factor(group), rt_deviance, col = as.factor(acc))) +
 #scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
   scale_color_manual(breaks = c(0, 1), labels = c("Error", "Correct"), values = c("orchid4", "seagreen4")) +
   labs(y = "Preceding RT deviance (s)", x = " ") 
-ggsave("accuracy_preceding.eps", height = 3.1, width = 5.3)
 ```
 
 
@@ -540,7 +372,6 @@ ggplot(toPlot.w, aes(group, mean_acc*100, col = pre_smoothed_deviance_cat)) +
   scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))+
   coord_cartesian(ylim = c(94, 100)) +
   labs(y = "Accuracy (%)", x = " ", col = " ") 
-ggsave("accuracy_preceding.eps", height = 3, width = 5.5)
 ```
 
 
@@ -597,7 +428,6 @@ ggplot(Dprime.hc[!participant %in% c(outlier$participant)], aes(group, dprime, f
 scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0) + 
   ylim(0.5,4)
-#ggsave(filename = "Hc_dprime_group.eps", height = 3, width = 5)
 
 # nonliving trials
 ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeF == 'nonliving'], aes(group, dprime, fill = as.factor(group))) +
@@ -608,7 +438,6 @@ ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeF
 scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0) + 
   ylim(0.5,4)
-#ggsave(filename = "Hc_dprime_group_NONLIVING.eps", height = 3, width = 5)
 
 # living trials
 ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeI == 'living'], aes(group, dprime, fill = as.factor(group))) +
@@ -619,19 +448,9 @@ ggplot(dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeI
 scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0) +
     ylim(0.15,4.5)
-#ggsave(filename = "Hc_dprime_group_LIVING.eps", height = 3, width = 5)
 ```
 
 ```{r dprime figure by age and trial type}
-ggplot(dprime.hc_trialtype, aes(group, dprime, col = group)) + 
-  geom_violin(trim = F) +
-      geom_quasirandom(width  = .2, size = 1) +
-  ggtheme +
-  labs(x = "", y = "d prime") +
-#scale_color_manual(breaks = c(1, -1), values = c("turquoise3", "violetred1")) +
-  stat_summary(color = 'black')  + 
-  facet_wrap(~trialTypeF)
-
 ggplot(dprime.hc_trialtype, aes(group, dprime, col = group)) + 
   #geom_violin(trim = F) +
       #geom_quasirandom(width  = .2, size = 1) +
@@ -640,7 +459,6 @@ ggplot(dprime.hc_trialtype, aes(group, dprime, col = group)) +
 scale_color_manual(values = c("darkblue", "mediumvioletred")) +
   stat_summary()  + 
   facet_wrap(~trialTypeF) 
-#ggsave(filename = "dprime_frequent.png", height = 5, width = 5)
 ```
 
 #########################################################
@@ -651,14 +469,13 @@ Join data
 ```{r join dprime to time out data}
 # join variables to overall dprime dataframe
 percents[, percentOutC := scale(percentOut, scale=F)]
-percents[, coef_varROC := scale(coef_varRO, scale=F)]
 
-percents_dprime.hc = left_join(Dprime.hc, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC, coef_var, coef_varRO)][, .(participant, percentOut, percentOutC)])
+percents_dprime.hc = left_join(Dprime.hc, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
 percents_dprime.hc = left_join(percents_dprime.hc, numOutChunks)
 percents_dprime.hc = left_join(percents_dprime.hc, median_length_lapse)
 
 # join variables to dataframe by trial types
-percents_dprime.hc_trialtype = left_join(dprime.hc_trialtype, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC, coef_varRO, coef_varROC)][, .(participant, percentOut, percentOutC, coef_varRO, coef_varROC)])
+percents_dprime.hc_trialtype = left_join(dprime.hc_trialtype, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
 percents_dprime.hc_trialtype = left_join(percents_dprime.hc_trialtype, numOutChunks)
 percents_dprime.hc_trialtype = left_join(percents_dprime.hc_trialtype, median_length_lapse)
 ```
@@ -682,7 +499,6 @@ ggplot(percents_dprime.hc[!participant %in% c(outlier$participant)], aes(percent
   #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
   scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0)
-#ggsave( file = "dprime_percent_out_group_fig_all.png", width = 5, height = 3)
 
 
 ggplot(percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & trialTypeEC == 0.5], aes(percentOut *100, dprime, col = group))+
@@ -696,7 +512,6 @@ ggplot(percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & t
   scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0) #+ 
   #coord_cartesian(ylim = c(0.5,3.5))
-ggsave( file = "dprime_percent_out_group_fig_frequent.png", width = 4, height = 2.5)
 
 
 # infrequent
@@ -710,7 +525,6 @@ ggplot(percents_dprime.hc_trialtype[!participant %in% c(outlier$participant) & t
   #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
   scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
   theme(legend.position = 0)
-ggsave( file = "dprime_percent_out_group_fig_infrequent.png", width = 4, height = 2.5)
 ```
 
 
@@ -728,10 +542,9 @@ encoding <- left_join(encoding, median_length_lapse)
 encoding <- left_join(encoding, numOutChunks)
 ```
 
-```{r models separately for C and A}
+```{r models}
 # rt preceding deviance
-fluctuations_hits.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  * classifyEncEC * groupEC +  (pre_smoothed_deviance_scaled * classifyEncEC ||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial')), by = .(group, classifyEnc)][term != '(Intercept)']
-
+fluctuations_hits.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  * classifyEncEC * groupEC +  (pre_smoothed_deviance_scaled * classifyEncEC ||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial'))][term != '(Intercept)']
 ```
 
 ```{r figure - overall memory}
@@ -746,6 +559,4 @@ ggplot(deviance_memory_prep.p[!is.na(memory_hits)], aes(as.factor(memory_hits), 
   ggtheme +
 scale_color_manual(values = c("royalblue3", "hotpink3")) +
   scale_x_discrete(labels = c("Forgotten", "Remembered"))
-ggsave(filename = "preceding_rt_memory.png", width  = 5, height = 3)
-
 ```
