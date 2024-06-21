@@ -11,7 +11,7 @@ chunk_output_type: console
 
 ```{r load/save image file}
 rm(list = ls())    
-library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary)
+library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary); source("../utils.r"); source("../info.r")
 encoding <- fread('encoding.csv')
 ```
 
