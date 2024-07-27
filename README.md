@@ -7,7 +7,7 @@ This readme contains documentation for the dataset. In this study, we looked at 
 
 ## Encoding
 
-The encoding.csv file contains data from the encoding session of the task. A description of the task can be found in the methods section of another published study (See experiment 1): https://www.sciencedirect.com/science/article/abs/pii/S0010027720301578
+The encoding.csv file contains data from the encoding session of the task. 
 
 
 ### Headings
@@ -24,8 +24,7 @@ The encoding.csv file contains data from the encoding session of the task. A des
 
 
 ## Recognition file
-The recognition_test.csv file contains data from the recognition phase. A decription of the task can be found in the published study: (See experiment 1): https://www.sciencedirect.com/science/article/abs/pii/S0010027720301578
-
+The recognition_test.csv file contains data from the recognition phase. 
 ### Headings
 - Participant: the participant number
 - trialNo: trial number
