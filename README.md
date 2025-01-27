@@ -5,6 +5,34 @@
 
 This readme contains documentation for the dataset. In this study, we looked at how fluctuations in attention influenced moment to moment changes in memory in children and adults. 
 
+You will need the following packages to run the code:
+hausekeep
+mediation
+roll
+broom
+lme4
+lmerTest
+dplyr
+data.table
+ggplot2
+dtplyr
+tidyr
+reshape2
+ggbeeswarm
+tidyverse
+tibble
+optimx
+Hmisc
+DescTools
+lm.beta
+zoo
+imputeTS
+ggsignif 
+sjPlot 
+sjmisc 
+sjlabelled 
+modelsummary
+
 ## Encoding
 
 The encoding.csv file contains data from the encoding session of the task. 
