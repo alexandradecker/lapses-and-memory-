@@ -1,0 +1,368 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+--
+title: "R Notebook"
+output: html_notebook
+chunk_output_type: console
+---
+
+```{r load data and libraries}
+rm(list = ls())    
+library(ggsignif); library(sjPlot); library(sjmisc); library(sjlabelled); library(modelsummary); source("utils.r"); source("info.r"); library(stats)
+encoding <- fread('../data/encoding.csv')
+```
+
+The code below is reported under the heading "Children's attention lapsed twice as frequently as adults'"
+
+The chunk below computes age group difference in time spent out of the zone (lapse rates).
+```{r age differences in lapse rates/time out of the zone}
+# calculate the percent of time each participant spends out of the zone
+percents <- encoding[!participant %in% c(outlier$participant), .(percentOut = mean(zone, na.rm=T)), by = .(participant,group, groupEC)]
+
+# fit model to test for age group differences in time spent out of the zone/lapse rates
+percents[, summaryh(t.test(percentOut ~ groupEC))]
+
+# plot figure 2E
+ggplot(percents, aes(group, percentOut *100, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "Mean accuracy", y = "Attentional lapse scores \n (Time out of the zone %)") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  coord_cartesian(ylim = c(-15, 110)) + 
+  scale_y_continuous(breaks = c(0, 20, 40, 60, 80, 100)) +
+  theme(legend.position = "None")
+```
+
+The chunk belwo computes age group differences in lapse length
+```{r age differences in lapse length}
+# compute lapse length per participant
+# it selects zone ==1 meaning time when people are "out" of the zone
+length_attentional_lapses = encoding[zone == 1 & !participant %in% c(outlier$participant), .N, by = .(participant, group, groupEC, chunkNo)]
+
+# compute a datatable that contains the median lapse length per participant
+median_length_lapse = length_attentional_lapses[, .(median_lapse_length = median(N)), by = .(participant, group, groupEC)]
+
+#model - pre-registered
+median_length_lapse[!participant %in% c(outlier$participant), summaryh(t.test(median_lapse_length ~ groupEC))]
+
+# figure S2
+ggplot(median_length_lapse, aes(group, median_lapse_length, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "", y = "Median lapse length") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = "None")
+```
+
+Age group difference in lapse frequency
+```{r age differences in lapse frequency}
+# compute the lapse frequency
+numOutChunks <- encoding[!participant %in% c(outlier$participant),.(Nolapses = max(chunkNo_out, na.rm=TRUE)), by = .(participant, group, groupEC)]
+
+# model
+summaryh(t.test(Nolapses ~ groupEC, data = numOutChunks))
+
+# figure S1
+ggplot(numOutChunks[!participant %in% c(outlier$participant)], aes(group, Nolapses, fill = as.factor(group))) +
+  geom_violin(trim = F, width = 1) +
+  geom_quasirandom(width  = .2, size =1 ) +
+  ggtheme +
+  labs(x = "Mean accuracy", y = "No. of attentional lapses") +
+  scale_fill_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = "None")
+```
+
+The code below plots Figure 2A,C- Representative child's raw RT and RT deviance
+Figure 2A and 2C
+```{r  eval = FALSE, echo = FALSE, include =FALSE}
+meanrt <- encoding[participant == 224, mean(rt, na.rm=T)]
+cutOff <- encoding[, median(smoothed_gaussian, na.rm=TRUE), by = .(participant)][, mean(V1)]
+
+# Figure 2A - raw RT
+ggplot(encoding[participant == 224], aes(trialNo, rtResidual + meanrt)) + 
+  geom_point(color = 'hotpink3', size = 2) + 
+  labs(x = 'Trial number', y = 'Response time (seconds)') + 
+  ggtheme +
+  coord_cartesian(ylim = c(0, 1.5))
+
+# Figure 2C - RT deviance with zone assignment
+toPlot <- encoding[participant == 224 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
+smoothed_values <- approx(toPlot$trialNo, toPlot$smoothed_gaussian, n = 3500)
+non_smoothed_values <- approx(toPlot$trialNo, toPlot$rtMeanAbsoluteDeviation, n = 3500)
+toPlot_smoothed <- data.table(trialNo = smoothed_values$x, smoothed_deviance = smoothed_values$y)
+toPlot_unsmoothed <- data.table(trialNo = non_smoothed_values$x, unsmoothed_deviance = non_smoothed_values$y)
+toPlot2 <- left_join(toPlot_unsmoothed, toPlot_smoothed)
+toPlot2[, zone := ifelse(smoothed_deviance > cutOff, 'Out of the zone', 'In the zone')]
+encoding[acc == 0, error := 0]
+toPlotErrors <- encoding[participant == 224 & trialNo %in% c(1:200), .(trialNo, error)]
+
+ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) + 
+  geom_line(data = toPlot2, aes(trialNo, y = unsmoothed_deviance), inherit.aes = F, color = 'lightgrey') +
+  geom_path(group = 1, size = 1.5) +
+  labs(x  = "Trial Number", y = "Smoothed RT deviance") +
+  ggtheme + 
+  scale_color_manual(breaks = c("In the zone", "Out of the zone"), values = c("maroon4", "hotpink1")) + 
+  geom_point(data = toPlotErrors, aes(trialNo, y = error), inherit.aes = F, color = 'red', shape = 15) + 
+  scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
+  coord_cartesian(ylim = c(0, 0.6)) + 
+  theme(legend.position = "None")
+```
+
+The code below plots Figure 2B, D - Representative adult's raw RT and RT deviance
+```{r Figure 2B and 2D eval = FALSE, echo = FALSE, include =FALSE}
+# Figue 2B
+meanrt <- encoding[participant == 157, mean(rt, na.rm=T)]
+ggplot(encoding[participant == 157], aes(trialNo, rtResidual + meanrt)) + 
+  geom_point(color = 'royalblue3', size = 2) + 
+  labs(x = 'Trial Number', y = 'Response time (seconds)') + 
+  ggtheme +
+  coord_cartesian(ylim = c(0, 1.5))
+
+# Figure 2D
+toPlot <- encoding[participant == 157 & trialNo %in% c(1:200), .(trialNo, smoothed_gaussian, rtMeanAbsoluteDeviation)]
+smoothed_values <- approx(toPlot$trialNo, toPlot$smoothed_gaussian, n = 3500)
+non_smoothed_values <- approx(toPlot$trialNo, toPlot$rtMeanAbsoluteDeviation, n = 3500)
+toPlot_smoothed <- data.table(trialNo = smoothed_values$x, smoothed_deviance = smoothed_values$y)
+toPlot_unsmoothed <- data.table(trialNo = non_smoothed_values$x, unsmoothed_deviance = non_smoothed_values$y)
+toPlot2 <- left_join(toPlot_unsmoothed, toPlot_smoothed)
+toPlot2[, zone := ifelse(smoothed_deviance > cutOff, 'Out of the zone', 'In the zone')]
+encoding[acc == 0, error := 0]
+toPlotErrors <- encoding[participant == 157 & trialNo %in% c(1:200), .(trialNo, error)]
+
+# Figure 2D
+ggplot(toPlot2, aes(trialNo, smoothed_deviance, col = zone)) + 
+  geom_line(data = toPlot2, aes(trialNo, y = unsmoothed_deviance), inherit.aes = F, color = 'lightgrey') +
+  geom_path(group = 1, size = 1.5) +
+  labs(x  = "Trial Number", y = "Smoothed RT deviance") +
+  ggtheme + 
+  scale_color_manual(breaks = c("In the zone", "Out of the zone"), values = c("royalblue4", "steelblue1")) + 
+  geom_point(data = toPlotErrors, aes(trialNo, y = error), inherit.aes = F, color = 'red', shape = 15) + 
+  scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6))+
+  coord_cartesian(ylim = c(0, 0.6)) + 
+  theme(legend.position = "None")
+```
+
+The following section of code is reported under the heading "Children's higher lapse rates underlie their lower categorization performance"
+
+First, compute age group differences in classification performance on the sustained attention task:
+```{r Age group differences in classification performance}
+# compute classification accuracy for each participant 
+aggregate_accuracy_group <- encoding[, .(acc = mean(acc)), by = .(participant, group, groupEC, groupA, groupC, trialTypeEC, trialType, trialTypeI, trialTypeF)]
+
+# fit model examining age group differences in classification accuracy
+accuracy_group.m_agg <- lmer(acc ~ groupEC * trialTypeEC + (1|participant), data = aggregate_accuracy_group[!participant %in% c(outlier$participant)]);summaryh(accuracy_group.m_agg)
+
+# fit model separately for children and adults:
+aggregate_accuracy_group[!participant %in% c(outlier$participant), summaryh(lm(acc ~ groupEC)), by = trialTypeEC][term != "(Intercept)"]
+encoding[, summaryh(lmer(acc ~ groupC * trialTypeEC + (1|participant)))]
+encoding[, summaryh(glmer(acc ~ groupC * trialTypeEC + (1|participant), family = "binomial"))]
+```
+
+Then, test how individual differences in lapse rates relate to classification performance:
+```{r relationship between attentional lapse rates and classification accuracy}
+# join data on lapse rates and accuracy:
+percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut)])
+
+# center the lapse rate variable:
+percents_trialtype[, percentOutC := scale(percentOut, scale = F)]
+
+# fit model relating time out of the zone to classification accuracy
+percentOut_accuracy.m <- lmer(acc ~ percentOutC * trialTypeEC * groupEC + (1|participant), data = percents_trialtype[!participant %in% c(outlier$participant)]); summaryh(percentOut_accuracy.m)
+
+# fit model separately for children and adults:
+percents_trialtype[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC)), by = .(group, trialTypeEC)][term != "(Intercept)"]
+
+# join average accuracy and attention data:
+mean_accuracy_group <- encoding[, .(acc = mean(acc)), by = .(participant, groupA, groupC)]
+percents <- left_join(percents, mean_accuracy_group)
+
+# Visualize - accuracy and attention correlation:
+ggplot(percents[!participant %in% c(outlier$participant)], aes(percentOut, acc, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.9, .95, 1), labels = c(90, 95, 100)) +
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+    coord_cartesian(ylim = c(.9, 1.01))+
+  theme(legend.position = "None")
+
+# Figure S4A
+ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'nonliving'], aes(percentOutC, acc, col = group))+
+  geom_point() +
+  ggtheme +
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.94, .96, .98, 1), labels = c(94, 96, 98, 100)) +
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
+  theme(legend.position = "None")
+
+# Figure S4B
+ggplot(percents_trialtype[!participant %in% c(outlier$participant) & trialType == 'living'], aes(percentOut, acc, col = group))+
+  geom_point() +
+  ggtheme +
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "Mean accuracy (%)") +
+  scale_x_continuous(breaks = c(0, .25, .50, .75), labels = c(0, 25, 50, 75)) +
+  scale_y_continuous(breaks = c(.4, .6, .8, 1), labels = c(40, 60, 80, 100)) +
+  coord_cartesian(ylim = c(.42, 1.018), xlim = c(0.05, .85))+
+scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) + 
+  theme(legend.position = "None")
+```
+
+Exploratory analysis to test whether lapses relate to accuracy in "high lapsing" adults.
+```{r}
+### two groups of adults ###
+# select a dataset of adults only for classifying adults into those who lapse more vs. less
+dataToCluster <- percents[group == "Adults" & !participant %in% c(outlier$participant), .(participant, percentOut)]
+
+# scale the percent of time individuals spent off task:
+dataToCluster[, percentOutZ := scale(percentOut)]
+
+# fit k means cluster model:
+dataToCluster$kmeansGroup <- kmeans(dataToCluster$percentOutZ, centers = 2, iter.max = 1000, algorithm = "MacQueen")[1]
+
+# bind the group labels to the percents data table:
+dataToCluster <- rbind(dataToCluster, percents[group == "Children" & !participant %in% c(outlier$participant), .(participant, percentOut)], fill = T)
+
+# join data
+percents <- left_join(percents, dataToCluster)
+# scale the percent out data
+percents[, percentOutC := scale(percentOut, scale = F)]
+
+# data
+percents_trialtype <- left_join(aggregate_accuracy_group[!participant %in% c(outlier$participant)], percents[, .(participant, percentOut, percentOutC, kmeansGroup)])
+
+# fit model relating lapse rates to accuracy in high and low lapsing adults:
+percents[!participant %in% c(outlier$participant), summaryh(lm(acc ~ percentOutC)), by = .(kmeansGroup)][term !="(Intercept)"]
+```
+
+Figure 4D
+```{r figure relating percent out to classification separately for high vs. low lapsing adults}
+ggplot(percents[!participant %in% c(outlier$participant) & group %in% ("Adults")], aes(percentOut*100, acc*100, col = as.factor(kmeansGroup)))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(data = percents[kmeansGroup == 1], formula = y ~ x, method = "lm") +
+  stat_smooth(data = percents[kmeansGroup == 2], formula = y ~ x, method = "lm") +
+  labs(x = "Lapse rates (%)", y = "Classification accuracy (%)") +
+  scale_color_manual(values = c("blue4", "royalblue1")) +
+  theme(legend.position = "None") +
+  coord_cartesian(ylim = c(95, 100)) + 
+  scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))
+```
+
+The following section is reported in analysis S3: Testing whether lapse rates mediate age group differences in classification accuracy
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+#acme: mediated (ab) effect
+#ade: direct effect (c')
+#total effect: c
+percents[!participant %in% c(outlier$participant), percentOutZ := scale(percentOut)]
+percents[!participant %in% c(outlier$participant), mean_acc.allZ := scale(acc)]
+
+model.y_all = lm(mean_acc.allZ ~ groupEC + percentOutZ , data = percents[!participant %in% c(outlier$participant)])
+summary(model.y_all)
+
+model.m_all = lm(percentOutZ ~ groupEC, data = percents[!participant %in% c(outlier$participant)])
+summary(model.m_all)
+
+model.mediate_attention_accuracy_all = mediate(model.m_all, model.y_all, sims = 5000, treat = 'groupEC', mediator = 'percentOutZ', covariates = 'mean_rt', boot = TRUE)
+summary(model.mediate_attention_accuracy_all)
+```
+
+The following chunks of code fit models reported under the heading "Within-participant fluctuations in attention shape categorization accuracy similarly in children and adults" in the paper. These models test whether fluctuations in attention covary with classification accuracy. 
+```{r eval = FALSE, include = FALSE, echo = FALSE}
+# fit model relating fluctuations in attention to classification accuracy:
+continuous_attention_accuracy_age_interaction.m = glmer(acc ~ pre_smoothed_deviance_scaled * trialTypeEC * groupEC + (pre_smoothed_deviance_scaled * trialTypeEC||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family  = "binomial", data = encoding); summaryh(continuous_attention_accuracy_age_interaction.m)
+```
+
+Figure 3d: Higher RT deviance predicts worse categorization:
+```{r }
+# for visualization purposes, separate the moving time course of RT deviance into a binary higher and lower deviance trials based on the median:
+encoding[, median_pre_smoothed_deviance := median(pre_smoothed_deviance, na.rm=T), by = participant]
+encoding[, pre_smoothed_deviance_cat := ifelse(pre_smoothed_deviance > median_pre_smoothed_deviance, "high", "low")]
+encoding[pre_smoothed_deviance == median_pre_smoothed_deviance, pre_smoothed_deviance_cat := "low"]
+
+#plot the data:
+toPlot <- encoding[!is.na(pre_smoothed_deviance_cat), .(mean_acc = mean(acc, na.rm=T)), by = .(participant, group, pre_smoothed_deviance_cat)]
+toPlot.w <- seWithin(data = toPlot, measurevar = "mean_acc", betweenvars = "group", withinvars = "pre_smoothed_deviance_cat", idvar = "participant")
+ggplot(toPlot.w, aes(group, mean_acc*100, col = pre_smoothed_deviance_cat)) +
+  #stat_summary()+
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = mean_acc*100 - se*100, ymax = mean_acc*100 + se*100), position = position_dodge(width = 0.5), width = 0, size = 1) + 
+  ggtheme  + 
+#scale_color_viridis(discrete = TRUE, option = "G", labels = c("Error", "Correct"))  +
+  scale_color_manual(breaks = c("low", "high"), labels = c("low deviance", "high deviance"), values = c("orchid4", "seagreen4")) +
+  scale_y_continuous(breaks = c(94, 96, 98, 100), labels = c("94", "96", "98", "100"))+
+  coord_cartesian(ylim = c(94, 100)) +
+  labs(y = "Accuracy (%)", x = " ", col = " ") 
+```
+
+The following code chunks are reported under the heading "Equivalent memory performance in children and adults"
+```{r }
+# read recognition file:
+recognition <- fread(file = '../data/recognition.csv')
+
+# compute high confidence d' for each participant:
+Dprime.hc <- recognition[, dprime(hits = memoryHits_dprime, false_alarms = false_alarm_dprime, na.rm = T), by = .(participant, group, groupEC, groupA, groupC)]
+
+# compute high confidence d' for each participant and trial type:
+dprime.hc_trialtype <- recognition[, dprime(hits = memoryHits_dprime, false_alarms = false_alarm_dprime, na.rm = T), by = .(participant, group, groupEC, groupA, groupC, trialTypeI, trialTypeF, trialTypeEC)]
+
+# scale d':
+dprime.hc_trialtype[, dprimeC := scale(dprime, scale = F)]
+```
+
+# fit model relating age group to d':
+```{r dprime by trial type}
+dprime.hc_trialtype[!participant %in% c(outlier$participant), summaryh(lmer(dprime ~ groupEC * trialTypeEC + (1|participant)))][term != '(Intercept)']
+dprime.hc_trialtype[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ trialTypeEC + (1|participant))), by = group][term != '(Intercept)']
+```
+
+The following code reports analyses reported in the section "High lapse rates impair memory across children and adults who lapse often:
+
+```{r join dprime to time out data}
+# join dprime and percent out of the zone dataframe, lapse length and frequency
+percents_dprime.hc = left_join(Dprime.hc, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
+
+percents_dprime.hc_trialtype = left_join(dprime.hc_trialtype, percents[, .N, by = .(participant, percentOut, percentOutC, groupEC)][, .(participant, percentOut, percentOutC)])
+```
+
+Run correlations
+```{r overall - collapsed across trial types}
+# correlations the percent of time out of the zone with d'
+percents_dprime.hc[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ percentOutC*groupEC))][!term == "(Intercept)"]
+percents_dprime.hc[!participant %in% c(outlier$participant), summaryh(lm(dprime ~ percentOutC)), by = group][!term == "(Intercept)"]
+```
+
+# Figure 4a: Attentional lapse rate and memory relationships by group
+
+```{r figure attentional lapse rate and memory relationships by group}
+ggplot(percents_dprime.hc[!participant %in% c(outlier$participant)], aes(percentOut *100, dprime, col = group))+
+  geom_point() +
+  ggtheme+
+  stat_smooth(formula = y ~ x, method = "lm") +
+  labs(x = "Time out of the zone (%)", y = "D prime") +
+  #scale_x_continuous(breaks = c(0, .2, .4, .6, 0.8), labels = c(0, 20, 40, 60, 80)) +
+  scale_y_continuous(breaks = c(1, 2, 3), labels = c(1, 2, 3)) +
+  #coord_cartesian(ylim = c(1, 3), xlim = c(0, .8)) +
+  scale_color_manual(breaks = c("Adults", "Children"), values = c("royalblue3", "hotpink3")) +
+  theme(legend.position = "None")
+```
+
+The following section is reported under the heading "Fluctuations in sustained attention shape memory formation across time more in chidlren than adults:
+```{r join memory and encoding data}
+encoding = left_join(encoding, recognition[classifyMemory == 'old', .(participant, stimulus, memory_hits)])
+```
+
+```{r fit models}
+# rt preceding deviance predicts memory hits
+fluctuations_hits.m <- encoding[, summaryh(glmer(memory_hits ~ pre_smoothed_deviance_scaled  * classifyEncEC * groupEC +  (pre_smoothed_deviance_scaled * classifyEncEC ||participant), control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)), family = 'binomial'))][term != '(Intercept)']
+print(fluctuations_hits.m)
+```
